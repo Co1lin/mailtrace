@@ -1,0 +1,50 @@
+services:
+  mailtrace:
+    # Default: pull the published image. To build locally instead, run
+    # `MAILTRACE_IMAGE= docker compose up --build` (empty string disables
+    # the registry pull and falls through to the build context below).
+    image: ${MAILTRACE_IMAGE:-ghcr.io/co1lin/mailtrace:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: ${MAILTRACE_PULL_POLICY:-missing}
+    restart: unless-stopped
+    depends_on:
+      mailtrace-redis:
+        condition: service_healthy
+    environment:
+      # All app settings come from MAILTRACE_* env vars.
+      # Edit .env (copied from .env.example) to provide credentials.
+      MAILTRACE_REDIS_URL: redis://mailtrace-redis:6379/0
+      MAILTRACE_HOST: 0.0.0.0
+      MAILTRACE_PORT: 8080
+      MAILTRACE_WORKERS: ${MAILTRACE_WORKERS:-2}
+      MAILTRACE_BARCODE_ID: ${MAILTRACE_BARCODE_ID:-0}
+      MAILTRACE_SERVICE_TYPE_ID: ${MAILTRACE_SERVICE_TYPE_ID:-40}
+      MAILTRACE_MAILER_ID: ${MAILTRACE_MAILER_ID:?set MAILTRACE_MAILER_ID in .env}
+      MAILTRACE_USPS_CLIENT_ID: ${MAILTRACE_USPS_CLIENT_ID:?set MAILTRACE_USPS_CLIENT_ID in .env}
+      MAILTRACE_USPS_CLIENT_SECRET: ${MAILTRACE_USPS_CLIENT_SECRET:?set MAILTRACE_USPS_CLIENT_SECRET in .env}
+      MAILTRACE_BCG_USERNAME: ${MAILTRACE_BCG_USERNAME:-}
+      MAILTRACE_BCG_PASSWORD: ${MAILTRACE_BCG_PASSWORD:-}
+      MAILTRACE_SESSION_SECRET: ${MAILTRACE_SESSION_SECRET:?set MAILTRACE_SESSION_SECRET in .env}
+      MAILTRACE_ROOT_PATH: ${MAILTRACE_ROOT_PATH:-}
+      MAILTRACE_TRUSTED_FEED_IPS: ${MAILTRACE_TRUSTED_FEED_IPS:-[]}
+      MAILTRACE_TIMEZONE: ${MAILTRACE_TIMEZONE:-UTC}
+      TZ: ${MAILTRACE_TIMEZONE:-UTC}
+    ports:
+      - "${MAILTRACE_BIND:-127.0.0.1:8084}:8080"
+
+  mailtrace-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - mailtrace-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  mailtrace-redis-data:

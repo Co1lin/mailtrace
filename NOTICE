@@ -1,0 +1,18 @@
+mailtrace
+=========
+
+This project is a re-engineered re-implementation of the USPS first-class
+mail envelope generator and Informed Visibility tracking service originally
+published at https://github.com/1997cui/envelope (AGPL-3.0).
+
+The Intelligent Mail Barcode (IMb) encoder in src/mailtrace/imb.py is
+adapted from the original envelope project, which itself is a Python
+implementation released by Sam Rushing under the Simplified BSD License
+(see https://www.opensource.org/licenses/bsd-license.html).
+
+The bundled font src/mailtrace/static/USPSIMBStandard.ttf is the
+USPS-published Intelligent Mail Barcode font, distributed by USPS for
+mailers' use.
+
+This project as a whole is licensed under the GNU Affero General Public
+License v3 (see LICENSE) to honor the upstream license.

@@ -1,0 +1,34 @@
+{% extends "_base.html" %}
+{% block title %}Save your tracking info{% endblock %}
+{% block body %}
+<h1>Tracking info — save this</h1>
+<p>You will need <strong>both</strong> values to track this piece later.</p>
+
+<div class="card">
+    <p><strong>Serial:</strong> {{ serial }}</p>
+    <p><strong>Receipt ZIP:</strong> {{ recipient_zip }}</p>
+</div>
+
+<div class="card">
+    <h2>Download envelope</h2>
+    <p>
+        <a href="{{ url_for('download', format_type='envelope', doc_type='html') }}">HTML</a>
+        &middot;
+        <a href="{{ url_for('download', format_type='envelope', doc_type='pdf') }}">PDF</a>
+    </p>
+</div>
+
+<div class="card">
+    <h2>Avery 8163 label</h2>
+    <p>Pick the cell on a fresh sheet (5 rows &times; 2 columns).</p>
+    <form action="{{ url_for('download', format_type='avery', doc_type='pdf') }}" method="get">
+        <div class="row">
+            <div><label>Row (1-5)</label><input type="number" name="row" min="1" max="5" value="1"></div>
+            <div><label>Column (1-2)</label><input type="number" name="col" min="1" max="2" value="1"></div>
+        </div>
+        <p><button type="submit">Download PDF</button></p>
+    </form>
+</div>
+
+<p><a href="{{ url_for('index') }}">&larr; Back</a></p>
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "_base.html" %}
+{% block title %}Tracking{% endblock %}
+{% block body %}
+<h1>Tracking</h1>
+<div id="loading">Loading…</div>
+<div id="result"></div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const serial = params.get('serial');
+const zip = params.get('receipt_zip');
+
+function esc(s) {
+    if (s === null || s === undefined) return 'N/A';
+    return String(s).replace(/[&<>"'`=\/]/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;',
+        "'": '&#39;', '`': '&#96;', '=': '&#61;', '/': '&#47;'
+    })[c]);
+}
+
+async function load() {
+    const url = `{{ url_for('track') }}?serial=${encodeURIComponent(serial)}&receipt_zip=${encodeURIComponent(zip)}`;
+    const resp = await fetch(url);
+    const payload = await resp.json();
+    document.getElementById('loading').style.display = 'none';
+    if (!resp.ok) {
+        document.getElementById('result').innerHTML =
+            `<p class="err">Error: ${esc(payload.detail || JSON.stringify(payload))}</p>`;
+        return;
+    }
+    render(payload);
+}
+
+function render(payload) {
+    const data = payload.data || {};
+    const scans = data.scans || [];
+    let html = '';
+    if (payload.error) {
+        html += `<p class="err">Live tracking unavailable: ${esc(payload.error)}</p>`;
+    }
+    html += `<div class="card">
+        <p><strong>IMb:</strong> ${esc(data.imb)}</p>
+        <p><strong>Expected delivery:</strong> ${esc(data.expected_delivery_date)}</p>
+        <p><strong>Mail class / shape:</strong> ${esc(data.mail_class)} / ${esc(data.mail_shape)}</p>
+        <p><strong>Start the clock:</strong> ${esc(data.start_the_clock_date)} at ${esc(data.start_the_clock_facility_name)}</p>
+    </div>`;
+    if (scans.length === 0) {
+        html += '<p>No scans yet.</p>';
+    } else {
+        html += `<table><thead><tr>
+            <th>Date/Time</th><th>Event</th><th>Type</th><th>Phase</th><th>Machine</th>
+            <th>Facility</th><th>City</th><th>State</th><th>ZIP</th>
+        </tr></thead><tbody>`;
+        for (const s of scans) {
+            html += `<tr>
+                <td>${esc(s.scan_date_time)}</td>
+                <td>${esc(s.scan_event_code)}</td>
+                <td>${esc(s.handling_event_type)}</td>
+                <td>${esc(s.mail_phase)}</td>
+                <td>${esc(s.machine_name)}</td>
+                <td>${esc(s.scan_facility_name)}</td>
+                <td>${esc(s.scan_facility_city)}</td>
+                <td>${esc(s.scan_facility_state)}</td>
+                <td>${esc(s.scan_facility_zip)}</td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+    }
+    document.getElementById('result').innerHTML = html;
+}
+
+load().catch(err => {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('result').innerHTML = `<p class="err">${esc(err.message)}</p>`;
+});
+</script>
+{% endblock %}

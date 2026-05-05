@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Envelope</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; }
+@font-face {
+    font-family: 'USPSIMBStandard';
+    src: url({{ imb_font_data_uri }}) format('truetype');
+    font-weight: normal;
+    font-style: normal;
+}
+.envelope {
+    width: 9.5in;
+    height: 4.125in;
+    padding: 0.25in;
+    transform-origin: left top;
+    page-break-after: always;
+    position: absolute;
+}
+.sender-address {
+    width: 4in;
+    height: 1.5in;
+    position: absolute;
+    font-family: "DejaVu Serif", serif;
+    white-space: pre-line;
+}
+.recipient-address {
+    width: 4in;
+    height: 2.5in;
+    position: absolute;
+    left: 5in;
+    bottom: 0.625in;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+.usps-barcode {
+    font-family: "USPSIMBStandard";
+    font-size: 16pt;
+    margin-bottom: 0.1in;
+}
+.barcode-humanreadable { font-size: 10pt; }
+.recipient-text {
+    font-family: "DejaVu Serif", serif;
+    white-space: pre-line;
+}
+</style>
+</head>
+<body>
+    <div class="envelope">
+        <div class="sender-address">{{ sender_address }}</div>
+        <div class="recipient-address">
+            <div class="usps-barcode">{{ barcode }}</div>
+            <div class="barcode-humanreadable">{{ human_readable_bar }}</div>
+            <div class="recipient-text">{{ recipient_address }}</div>
+        </div>
+    </div>
+</body>
+</html>

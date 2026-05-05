@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.python-version
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# uv
+# keep uv.lock committed for reproducible builds
+
+# Tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Type checkers
+.mypy_cache/
+.ruff_cache/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Local config
+.env
+.env.local
+
+# Runtime artifacts
+*.pdf
