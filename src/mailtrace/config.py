@@ -42,7 +42,15 @@ class Settings(BaseSettings):
     # Web app
     session_secret: SecretStr = SecretStr("change-me")
     root_path: str = ""
+
+    # /usps_feed access control. Defaults are fail-closed: only requests from
+    # trusted_proxies are accepted, and the X-Forwarded-For header is only
+    # honored when the immediate caller is in trusted_proxies. Set
+    # feed_open=True to disable the check entirely (do NOT do this on the
+    # public internet).
     trusted_feed_ips: list[str] = Field(default_factory=list)
+    trusted_proxies: list[str] = Field(default_factory=lambda: ["127.0.0.1", "::1"])
+    feed_open: bool = False
 
     # Operational
     serial_rolling_window: int = 50

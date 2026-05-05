@@ -274,14 +274,8 @@ async def track(
 # ---------------------------------------------------------------------------
 
 
-def _client_allowed(request: Request, allowed: list[str]) -> bool:
-    if not allowed:
-        return True
-    client = request.client
-    if client is None:
-        return False
-    candidate = ipaddress.ip_address(client.host)
-    for entry in allowed:
+def _ip_in(candidate: ipaddress._BaseAddress, entries: list[str]) -> bool:
+    for entry in entries:
         try:
             if "/" in entry:
                 if candidate in ipaddress.ip_network(entry, strict=False):
@@ -293,13 +287,60 @@ def _client_allowed(request: Request, allowed: list[str]) -> bool:
     return False
 
 
+def _resolve_caller(request: Request, trusted_proxies: list[str]) -> ipaddress._BaseAddress | None:
+    """Return the originating client IP, only honoring X-Forwarded-For when
+    the immediate peer is itself a trusted proxy. Returns None if the peer
+    address is missing or unparseable.
+    """
+    if request.client is None:
+        return None
+    try:
+        peer = ipaddress.ip_address(request.client.host)
+    except ValueError:
+        return None
+    xff = request.headers.get("x-forwarded-for")
+    if xff and _ip_in(peer, trusted_proxies):
+        # Walk the chain right-to-left, skipping any hops that are also
+        # trusted proxies, until we find the real client.
+        for hop in reversed([h.strip() for h in xff.split(",") if h.strip()]):
+            try:
+                hop_ip = ipaddress.ip_address(hop)
+            except ValueError:
+                continue
+            if not _ip_in(hop_ip, trusted_proxies):
+                return hop_ip
+    return peer
+
+
+def _feed_caller_allowed(
+    request: Request,
+    *,
+    allowed: list[str],
+    trusted_proxies: list[str],
+    feed_open: bool,
+) -> bool:
+    if feed_open:
+        return True
+    if not allowed:
+        return False  # fail closed: empty allowlist + feed_open=False = deny all
+    caller = _resolve_caller(request, trusted_proxies)
+    if caller is None:
+        return False
+    return _ip_in(caller, allowed)
+
+
 @router.post("/usps_feed")
 async def usps_feed(
     request: Request,
     settings: SettingsDep,
     store: StoreDep,
 ) -> dict[str, Any]:
-    if not _client_allowed(request, settings.trusted_feed_ips):
+    if not _feed_caller_allowed(
+        request,
+        allowed=settings.trusted_feed_ips,
+        trusted_proxies=settings.trusted_proxies,
+        feed_open=settings.feed_open,
+    ):
         raise HTTPException(status_code=403, detail="caller not in trusted_feed_ips")
     payload = await request.json()
     events = payload.get("events") if isinstance(payload, dict) else None

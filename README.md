@@ -68,11 +68,25 @@ the full list.
 To put it behind a reverse proxy under a subpath (the way the upstream
 `/envelope` deployment does), set `MAILTRACE_ROOT_PATH=/envelope`.
 
-To pin which IPs may push to `/usps_feed`, set:
+### Locking down `/usps_feed`
+
+The push receiver is **fail-closed by default**: with no allowlist, every
+request is rejected with 403. To enable it, list USPS's egress IPs:
 
 ```env
 MAILTRACE_TRUSTED_FEED_IPS=["56.0.0.0/8"]
 ```
+
+Behind a reverse proxy, also list the proxy's address so `X-Forwarded-For`
+is honored:
+
+```env
+MAILTRACE_TRUSTED_PROXIES=["10.0.0.0/24"]
+```
+
+`X-Forwarded-For` is **only** honored when the immediate TCP peer is in
+`MAILTRACE_TRUSTED_PROXIES`, so a direct caller cannot spoof the
+allowlist.
 
 ## Local development
 

@@ -25,6 +25,9 @@ def settings() -> Settings:
         bcg_password="pass",
         redis_url="redis://localhost:6379/0",
         session_secret="test-session-secret",
+        # Open the feed for tests that aren't specifically about the allowlist.
+        # Allowlist behavior has its own dedicated tests.
+        feed_open=True,
     )
 
 

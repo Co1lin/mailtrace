@@ -150,12 +150,84 @@ async def test_feed_drops_non_letter_events(client: AsyncClient) -> None:
 async def test_feed_rejects_untrusted_caller(settings: Settings, fake_usps: Any) -> None:
     redis = FakeAsyncRedis()
     store = Store(redis, rolling_window_days=50, event_ttl_seconds=60)
-    settings = settings.model_copy(update={"trusted_feed_ips": ["10.0.0.1"]})
+    settings = settings.model_copy(update={"trusted_feed_ips": ["10.0.0.1"], "feed_open": False})
     app = _build_app(settings, store, fake_usps)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         resp = await ac.post("/usps_feed", json={"events": []})
         assert resp.status_code == 403
+    await redis.aclose()
+
+
+async def test_feed_denies_when_allowlist_empty(settings: Settings, fake_usps: Any) -> None:
+    """Empty trusted_feed_ips + feed_open=False must reject (fail closed)."""
+    redis = FakeAsyncRedis()
+    store = Store(redis, rolling_window_days=50, event_ttl_seconds=60)
+    settings = settings.model_copy(update={"feed_open": False, "trusted_feed_ips": []})
+    app = _build_app(settings, store, fake_usps)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/usps_feed", json={"events": []})
+        assert resp.status_code == 403
+    await redis.aclose()
+
+
+async def test_feed_open_flag_disables_check(settings: Settings, fake_usps: Any) -> None:
+    redis = FakeAsyncRedis()
+    store = Store(redis, rolling_window_days=50, event_ttl_seconds=60)
+    settings = settings.model_copy(update={"feed_open": True})
+    app = _build_app(settings, store, fake_usps)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post("/usps_feed", json={"events": []})
+        assert resp.status_code == 200
+    await redis.aclose()
+
+
+async def test_feed_does_not_honor_xff_from_untrusted_peer(
+    settings: Settings, fake_usps: Any
+) -> None:
+    """A direct caller cannot spoof the trusted IP via X-Forwarded-For."""
+    redis = FakeAsyncRedis()
+    store = Store(redis, rolling_window_days=50, event_ttl_seconds=60)
+    settings = settings.model_copy(
+        update={
+            "trusted_feed_ips": ["56.0.0.1"],
+            "trusted_proxies": ["10.99.99.99"],  # not the test client peer
+            "feed_open": False,
+        }
+    )
+    app = _build_app(settings, store, fake_usps)
+    transport = ASGITransport(app=app, client=("203.0.113.7", 12345))
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/usps_feed",
+            json={"events": []},
+            headers={"X-Forwarded-For": "56.0.0.1"},
+        )
+        assert resp.status_code == 403
+    await redis.aclose()
+
+
+async def test_feed_honors_xff_from_trusted_proxy(settings: Settings, fake_usps: Any) -> None:
+    redis = FakeAsyncRedis()
+    store = Store(redis, rolling_window_days=50, event_ttl_seconds=60)
+    settings = settings.model_copy(
+        update={
+            "trusted_feed_ips": ["56.0.0.1"],
+            "trusted_proxies": ["203.0.113.7"],  # the proxy in front of us
+            "feed_open": False,
+        }
+    )
+    app = _build_app(settings, store, fake_usps)
+    transport = ASGITransport(app=app, client=("203.0.113.7", 12345))
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        resp = await ac.post(
+            "/usps_feed",
+            json={"events": []},
+            headers={"X-Forwarded-For": "56.0.0.1"},
+        )
+        assert resp.status_code == 200
     await redis.aclose()
 
 
