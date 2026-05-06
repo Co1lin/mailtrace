@@ -245,8 +245,15 @@ async def usps_feed(request: Request, db: SessionDep) -> Response:
         await db.commit()
         raise HTTPException(status_code=413, detail="body too large")
 
+    # Auto-detect gzip via the magic bytes (1f 8b) — gzip files always
+    # start with them, so this is more reliable than trusting a USPS
+    # Content-Encoding header (which they sometimes omit) or an operator
+    # who set IngestSubscription.expect_gzip but USPS is actually sending
+    # plain JSON (or vice-versa). Plain JSON cannot start with these
+    # bytes, so false positives are impossible.
     enc = request.headers.get("content-encoding", "").lower()
-    if "gzip" in enc or cfg.expect_gzip:
+    looks_gzipped = raw_bytes.startswith(b"\x1f\x8b")
+    if looks_gzipped or "gzip" in enc:
         try:
             raw_bytes = gzip.decompress(raw_bytes)
         except (OSError, EOFError) as err:

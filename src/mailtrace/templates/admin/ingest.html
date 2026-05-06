@@ -64,11 +64,11 @@
             </div>
             <div>
                 <label>Expect gzip body
-                    <small>(set if you picked "Zipped" in the IV portal)</small>
+                    <small>(legacy hint — auto-detected from the body's gzip magic bytes regardless)</small>
                 </label>
                 <input type="checkbox" name="expect_gzip" value="true"
                        {% if cfg and cfg.expect_gzip %}checked{% endif %}>
-                Decompress gzip
+                Decompress gzip <small>(safe to leave either way)</small>
             </div>
         </div>
 

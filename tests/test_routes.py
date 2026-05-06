@@ -785,6 +785,50 @@ async def test_feed_decompresses_gzip(
     assert resp.json()["records"] == 1
 
 
+async def test_feed_accepts_plain_when_expect_gzip_set(
+    anon_client: AsyncClient,
+    db_sessionmaker: async_sessionmaker,
+) -> None:
+    """expect_gzip=True must NOT force decompression of an already-plain
+    body. Gzip is auto-detected from the magic bytes; an operator who
+    flipped the checkbox while USPS is still set to "Un-zipped" should
+    NOT cause every delivery to fail. (This was the self-test bug.)"""
+    await _enable_ingest(db_sessionmaker, expect_gzip=True)
+    resp = await anon_client.post(
+        "/usps_feed",
+        json={"data": [{"imb": "no-match"}]},
+        headers={"authorization": _iv_auth_header()},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["records"] == 1
+
+
+async def test_feed_decompresses_gzip_when_expect_gzip_unset(
+    anon_client: AsyncClient,
+    db_sessionmaker: async_sessionmaker,
+) -> None:
+    """Conversely: a gzipped body still decompresses even if the operator
+    never ticked the expect_gzip box and USPS forgot the
+    Content-Encoding header. The magic bytes carry the truth."""
+    import gzip
+    import json as json_mod
+
+    await _enable_ingest(db_sessionmaker, expect_gzip=False)
+    raw = json_mod.dumps({"data": [{"imb": "no-match"}]}).encode()
+    gz = gzip.compress(raw)
+    resp = await anon_client.post(
+        "/usps_feed",
+        content=gz,
+        headers={
+            "authorization": _iv_auth_header(),
+            "content-type": "application/json",
+            # No content-encoding header on purpose.
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["records"] == 1
+
+
 async def test_feed_writes_ingest_log(
     anon_client: AsyncClient, db_sessionmaker: async_sessionmaker
 ) -> None:
