@@ -411,21 +411,30 @@ but the rest of the app still works — users can type addresses by hand.
 
 1. Make sure you have a **BCG account** first (see (2)) — the developer
    portal uses BCG single sign-on.
-2. Go to <https://developer.usps.com/> and sign in.
-3. Click **Add App** (or *My Apps → Create App*). Give it a name like
-   "mailtrace" and an optional description.
-4. On the app's edit page under **APIs**, enable at least:
-   - ✅ **Addresses 3.0** — required for the validate button.
-5. Save. The app's detail page now shows two values:
-   - **Consumer Key** → paste into the **Client ID** field at
-     `/auth/account` in mailtrace.
-   - **Consumer Secret** → click **Show** to reveal, paste into the
-     **Client Secret** field.
-   Click **Save all sections**. Then click **Test USPS API** on that
-   page to verify the credentials work end-to-end.
+2. Go to <https://developer.usps.com/> and click **Get Started**;
+   follow the prompts. You'll end up at the USPS Customer Onboarding
+   Portal at <https://cop.usps.com/>, signed in with your BCG account.
+3. Inside cop.usps.com, look for a small **My Apps** button in the
+   top-right corner. Click it.
+4. Create a new app (any name — e.g. "mailtrace"). Once the app is
+   created, its detail page exposes a **Consumer Key** and a
+   **Consumer Secret**.
+5. Paste the Consumer Key into the **Client ID** field at
+   `/auth/account` in mailtrace, and the Consumer Secret into the
+   **Client Secret** field. Click **Save all sections**, then click
+   **Test USPS API** under "Test your setup" to verify.
 6. Wait ~5–10 minutes after USPS app creation for their edge to
    propagate the credentials. First-time client_credentials calls
-   sometimes return 401 for ~10 minutes after app creation.
+   sometimes return 401 for ~10 minutes after app creation; the
+   Test USPS API button will then return success.
+
+> **Note:** USPS' onboarding flow has changed in the past and the
+> exact button labels / screens may differ from the above. The goal
+> is unchanged: end up with a **Consumer Key + Consumer Secret** pair
+> from a USPS-issued developer app, then paste them into mailtrace's
+> Account page. Address standardization is one of the products bundled
+> with the default app on the modern API; the deprecated "Web Tools"
+> (XML) flow at `secure.shippingapis.com` is *not* what mailtrace uses.
 
 **Cost:** free tier is generous; mailtrace makes one call per Validate
 click and one OAuth refresh every ~30 minutes.

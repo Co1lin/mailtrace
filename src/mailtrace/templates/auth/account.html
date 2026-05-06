@@ -98,14 +98,20 @@
        piece / address forms. Without these, the button returns an error
        but you can still type addresses by hand.</p>
     <details>
-        <summary>How to get them (5 min)</summary>
+        <summary>How to get them</summary>
         <ol>
             <li>You need a BCG account first — <a href="https://gateway.usps.com/" target="_blank" rel="noopener">gateway.usps.com</a>, sign up for a Business Account.</li>
-            <li>Go to <a href="https://developer.usps.com/" target="_blank" rel="noopener">developer.usps.com</a> and sign in with your BCG account.</li>
-            <li><em>Add App</em> → name it "mailtrace" → enable <strong>Addresses 3.0</strong>.</li>
-            <li>Save. The app's detail page shows a <strong>Consumer Key</strong> and <strong>Consumer Secret</strong>.</li>
-            <li>Paste them below. (USPS' edge can take ~10 min to propagate; if a Test fails right after creating the app, wait and retry.)</li>
+            <li>Go to <a href="https://developer.usps.com/" target="_blank" rel="noopener">developer.usps.com</a> and click <strong>Get Started</strong>; follow the prompts. You'll end up on the USPS Customer Onboarding Portal at <a href="https://cop.usps.com/" target="_blank" rel="noopener">cop.usps.com</a>, signed in with your BCG account.</li>
+            <li>In cop.usps.com look for the small <strong>My Apps</strong> button in the top-right corner. Click it and create a new app (any name — e.g. "mailtrace").</li>
+            <li>Once the app is created, its detail page shows a <strong>Consumer Key</strong> and <strong>Consumer Secret</strong>. Copy both.</li>
+            <li>Paste the Consumer Key into <em>Client ID</em> below and the Consumer Secret into <em>Client Secret</em>, then <strong>Save all sections</strong> at the bottom of this page.</li>
+            <li>Click <strong>Test USPS API</strong> in the "Test your setup" section to verify. (USPS' edge can take ~10 min to propagate after app creation; if the first test fails with a 401, wait a bit and retry.)</li>
         </ol>
+        <p class="lede"><small>USPS' onboarding flow has changed before and may
+           change again — these are the URLs and screens as of writing. If you
+           land somewhere different, the goal is unchanged: end up with a
+           <strong>Consumer Key + Consumer Secret</strong> pair from a USPS
+           developer app, then paste them below.</small></p>
     </details>
 
     <label>Client ID <small>(Consumer Key)</small></label>
