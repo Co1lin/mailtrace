@@ -1,79 +1,50 @@
 {% extends "_base.html" %}
-{% block title %}mailtrace - generate envelope{% endblock %}
+{% block title %}mailtrace{% endblock %}
 {% block body %}
-<h1>mailtrace</h1>
-<p class="lede">Track your stamped USPS first-class letters with a printed Intelligent Mail Barcode.</p>
+<h1>Welcome, {{ user.email }}</h1>
+{% if user.mailer_id is none %}
+<div class="flash">
+    You haven't set your USPS Mailer ID yet. <a href="/auth/account">Open Account</a>
+    to enter it before creating any mail pieces.
+</div>
+{% endif %}
 
 <div class="card">
-    <h2>Generate envelope</h2>
-    <form method="POST" action="{{ url_for('generate') }}" target="_blank" id="addr-form">
-        <label for="sender_address">Sender address</label>
-        <textarea name="sender_address" rows="4"></textarea>
-
-        <label>Recipient name</label>
-        <input type="text" name="recipient_name" maxlength="100" required>
-
-        <label>Recipient company <small>(optional)</small></label>
-        <input type="text" name="recipient_company" maxlength="100">
-
-        <label>Street address</label>
-        <input type="text" name="recipient_street" maxlength="100" required>
-
-        <label>Address line 2 <small>(optional)</small></label>
-        <input type="text" name="recipient_address2" maxlength="100">
-
-        <label>City, state, ZIP (5, 9 or 11 digits)</label>
-        <div class="row">
-            <input type="text" name="recipient_city" maxlength="100" placeholder="City" required>
-            <input type="text" name="recipient_state" maxlength="2" minlength="2" placeholder="ST" required>
-            <input type="text" name="recipient_zip" maxlength="11" pattern="\d{5}|\d{9}|\d{11}" placeholder="ZIP" required>
-        </div>
-
-        <p>
-            <button type="button" class="secondary" onclick="validateAddress();">Validate address</button>
-            <input type="submit" value="Generate">
-        </p>
-    </form>
+    <h2>Quick actions</h2>
+    <p>
+        <a href="/pieces/new">+ New piece</a>
+        &nbsp;·&nbsp;
+        <a href="/pieces/batch">+ Stock batch</a>
+        &nbsp;·&nbsp;
+        <a href="/pieces/import">+ CSV import</a>
+        &nbsp;·&nbsp;
+        <a href="/pieces/">All pieces</a>
+        &nbsp;·&nbsp;
+        <a href="/addresses/">Addresses</a>
+    </p>
 </div>
 
 <div class="card">
-    <h2>Track mail</h2>
-    <form id="track-form">
-        <label>Serial</label>
-        <input type="text" id="serial" required maxlength="6" pattern="\d*">
-        <label>Receipt ZIP <small>(same digits used for the envelope)</small></label>
-        <input type="text" id="receiptZip" required maxlength="11" pattern="\d{5}|\d{9}|\d{11}">
-        <p><input type="submit" value="Track"></p>
-    </form>
+    <h2>Recent pieces</h2>
+    {% if not recent_pieces %}
+    <p class="lede">No pieces yet. <a href="/pieces/new">Create your first one.</a></p>
+    {% else %}
+    <table>
+        <thead><tr>
+            <th>Created</th><th>Label</th><th>Recipient</th><th>Status</th><th>IMb</th>
+        </tr></thead>
+        <tbody>
+        {% for p in recent_pieces %}
+        <tr>
+            <td><a href="/pieces/{{ p.id }}">{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</a></td>
+            <td>{{ p.label or '—' }}</td>
+            <td>{{ p.recipient_block.split('\n')[0] if p.recipient_block else '—' }}</td>
+            <td><span class="pill">{{ p.status }}</span></td>
+            <td><code>{{ p.human_readable_imb() }}</code></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
 </div>
-
-<script>
-async function validateAddress() {
-    const form = document.getElementById('addr-form');
-    if (!form.checkValidity()) { form.reportValidity(); return; }
-    const fd = new FormData();
-    fd.set('firmname', form.recipient_company.value.trim());
-    fd.set('address2', form.recipient_address2.value.trim());
-    fd.set('street_address', form.recipient_street.value.trim());
-    fd.set('city', form.recipient_city.value.trim());
-    fd.set('state', form.recipient_state.value.trim());
-    fd.set('zip', form.recipient_zip.value.trim());
-    const resp = await fetch('{{ url_for("validate_address") }}', { method: 'POST', body: fd });
-    const data = await resp.json();
-    if (data.error) { alert('Address validation failed: ' + JSON.stringify(data.error)); return; }
-    form.recipient_company.value = data.firmname || '';
-    form.recipient_address2.value = data.address2 || '';
-    form.recipient_street.value = data.street_address || '';
-    form.recipient_city.value = data.city || '';
-    form.recipient_state.value = data.state || '';
-    form.recipient_zip.value = (data.zip5 || '') + (data.zip4 || '') + (data.dp || '');
-}
-
-document.getElementById('track-form').addEventListener('submit', e => {
-    e.preventDefault();
-    const zip = document.getElementById('receiptZip').value;
-    const serial = document.getElementById('serial').value;
-    window.location.href = `{{ url_for('tracking_page') }}?receipt_zip=${encodeURIComponent(zip)}&serial=${encodeURIComponent(serial)}`;
-});
-</script>
 {% endblock %}

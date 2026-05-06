@@ -1,0 +1,80 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - {% if address %}edit{% else %}new{% endif %} address{% endblock %}
+{% block body %}
+<h1>{% if address %}Edit address{% else %}New address{% endif %}</h1>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<div class="card">
+<form method="POST" action="{% if address %}/addresses/{{ address.id }}{% else %}/addresses/{% endif %}">
+    <label>Label <small>(short nickname; must be unique within your account)</small></label>
+    <input type="text" name="label" required maxlength="80" value="{{ address.label if address else '' }}">
+
+    <label>Role</label>
+    <select name="role">
+        {% set role = address.role if address else 'recipient' %}
+        <option value="recipient" {% if role == 'recipient' %}selected{% endif %}>Recipient</option>
+        <option value="sender" {% if role == 'sender' %}selected{% endif %}>Sender</option>
+        <option value="both" {% if role == 'both' %}selected{% endif %}>Both</option>
+    </select>
+
+    <label>Name</label>
+    <input type="text" name="name" maxlength="120" value="{{ address.name if address else '' }}">
+
+    <label>Company <small>(optional)</small></label>
+    <input type="text" name="company" maxlength="120" value="{{ address.company if address else '' }}">
+
+    <label>Street</label>
+    <input type="text" name="street" maxlength="200" value="{{ address.street if address else '' }}">
+
+    <label>Address line 2 <small>(optional)</small></label>
+    <input type="text" name="address2" maxlength="200" value="{{ address.address2 if address else '' }}">
+
+    <div class="row">
+        <div><label>City</label><input type="text" name="city" value="{{ address.city if address else '' }}"></div>
+        <div><label>State</label><input type="text" name="state" maxlength="2" value="{{ address.state if address else '' }}"></div>
+        <div><label>ZIP</label><input type="text" name="zip" pattern="\d{5}|\d{9}|\d{11}|\d{5}-\d{4}|\d{5}-\d{4}-\d{2}" value="{{ address.zip if address else '' }}"></div>
+    </div>
+
+    <p>
+        <button type="button" class="secondary" onclick="validateAddress(this)">Validate against USPS</button>
+        <span id="validate-status" style="margin-left:0.5rem"></span>
+    </p>
+
+    <p><button type="submit">Save</button> <a href="/addresses/">Cancel</a></p>
+</form>
+</div>
+
+<script>
+async function validateAddress(btn) {
+    const form = btn.closest('form');
+    const status = document.getElementById('validate-status');
+    const fd = new FormData();
+    fd.set('firmname', (form.company.value || '').trim());
+    fd.set('address2', (form.address2.value || '').trim());
+    fd.set('street_address', (form.street.value || '').trim());
+    fd.set('city', (form.city.value || '').trim());
+    fd.set('state', (form.state.value || '').trim());
+    fd.set('zip', (form.zip.value || '').trim());
+    btn.disabled = true; status.textContent = 'checking…'; status.className = '';
+    try {
+        const resp = await fetch('/addresses/validate', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (!resp.ok || data.error) {
+            status.textContent = 'failed: ' + (data.error || resp.statusText);
+            status.className = 'err'; return;
+        }
+        const a = data.address;
+        form.company.value = a.firmname || form.company.value;
+        form.address2.value = a.address2 || '';
+        form.street.value = a.street_address || form.street.value;
+        form.city.value = a.city || form.city.value;
+        form.state.value = a.state || form.state.value;
+        form.zip.value = (a.zip5 || '') + (a.zip4 || '') + (a.dp || '');
+        status.textContent = 'standardized.'; status.className = 'ok';
+    } catch (e) {
+        status.textContent = 'network error'; status.className = 'err';
+    } finally {
+        btn.disabled = false;
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,126 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - SMTP{% endblock %}
+{% block body %}
+<h1>Admin · email (SMTP)</h1>
+<p><a href="/admin/">&larr; user list</a></p>
+
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
+<div class="card">
+    <h2>SMTP server</h2>
+    <p class="lede">All scan-update emails go out via this server. Until you
+       enable it, no emails are sent.</p>
+
+    <form method="POST" action="/admin/email">
+        <label>SMTP host</label>
+        <input type="text" name="host" required value="{{ cfg.host if cfg else '' }}" placeholder="smtp.office365.com">
+
+        <div class="row">
+            <div>
+                <label>Port</label>
+                <input type="number" name="port" min="1" max="65535" value="{{ cfg.port if cfg else 587 }}">
+            </div>
+            <div>
+                <label>Encryption</label>
+                <select name="encryption">
+                    {% set enc = cfg.encryption if cfg else 'starttls' %}
+                    <option value="starttls" {% if enc == 'starttls' %}selected{% endif %}>STARTTLS (587)</option>
+                    <option value="tls" {% if enc == 'tls' %}selected{% endif %}>Implicit TLS (465)</option>
+                    <option value="none" {% if enc == 'none' %}selected{% endif %}>None (plain)</option>
+                </select>
+            </div>
+        </div>
+
+        <label>Username</label>
+        <input type="text" name="username" value="{{ cfg.username if cfg else '' }}" placeholder="you@yourorg.com">
+
+        <label>Password
+            {% if cfg and cfg.password %}<small>(stored)</small>{% endif %}
+        </label>
+        <input type="password" name="password" placeholder="{{ '•••••• (already saved; leave blank to keep)' if (cfg and cfg.password) else 'app password / API key' }}" autocomplete="new-password">
+        {% if cfg and cfg.password %}
+        <label><input type="checkbox" name="leave_password_unchanged" value="true" checked> Keep existing password (uncheck to replace)</label>
+        {% endif %}
+
+        <label>From address</label>
+        <input type="email" name="from_address" required value="{{ cfg.from_address if cfg else '' }}" placeholder="you@yourorg.com">
+
+        <label>From display name <small>(optional)</small></label>
+        <input type="text" name="from_name" value="{{ cfg.from_name if cfg else '' }}" placeholder="mailtrace">
+
+        <label>Public base URL <small>(used to build links in emails, e.g. https://mailtrace.example.com)</small></label>
+        <input type="url" name="public_base_url" value="{{ cfg.public_base_url if cfg else '' }}" placeholder="https://mailtrace.example.com">
+
+        <label>
+            <input type="checkbox" name="enabled" value="true" {% if cfg and cfg.enabled %}checked{% endif %}>
+            Enable email delivery
+        </label>
+
+        <p><button type="submit">Save</button></p>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Send a test</h2>
+    <form method="POST" action="/admin/email/test">
+        <label>Send to <small>(defaults to your account email)</small></label>
+        <input type="email" name="test_recipient" placeholder="{{ user.email }}">
+        <p><button class="secondary" type="submit">Send test email</button></p>
+    </form>
+</div>
+
+<h2>Provider field guides</h2>
+<p class="lede">Copy-paste-friendly settings for the common cases. The
+   plaintext SMTP password is stored in the local SQLite database — for
+   shared SMTP services, use a scoped API key rather than your real
+   password whenever possible.</p>
+
+<div class="card">
+    <h3>Office 365 / Microsoft 365 (work or school account)</h3>
+    <table>
+        <tr><th>Host</th><td><code>smtp.office365.com</code></td></tr>
+        <tr><th>Port</th><td><code>587</code></td></tr>
+        <tr><th>Encryption</th><td>STARTTLS</td></tr>
+        <tr><th>Username</th><td>your full email address (e.g. <code>you@yourorg.onmicrosoft.com</code> or <code>you@yourcompany.com</code>)</td></tr>
+        <tr><th>Password</th><td>your account password, or an <strong>app password</strong> if MFA is on</td></tr>
+        <tr><th>From address</th><td>same as username (Microsoft rejects mismatched From)</td></tr>
+    </table>
+    <p><strong>Heads up — common gotchas:</strong></p>
+    <ul>
+        <li>Your tenant admin must enable <em>Authenticated SMTP</em> for your mailbox.
+            In Microsoft 365 admin center → <code>Users</code> → pick the user →
+            <code>Mail</code> → <code>Manage email apps</code> → make sure
+            <strong>Authenticated SMTP</strong> is on.</li>
+        <li>If MFA is enabled on the account, your normal password will not work over SMTP. Generate an app password at
+            <a href="https://account.microsoft.com/security" target="_blank" rel="noopener">https://account.microsoft.com/security</a> →
+            <em>Advanced security options</em> → <em>App passwords</em>.</li>
+        <li>Microsoft has been disabling basic SMTP auth across many tenants. If your tenant has it locked off and you cannot enable it,
+            use a relay (SendGrid / Postmark / Resend / AWS SES) instead.</li>
+    </ul>
+</div>
+
+<div class="card">
+    <h3>Gmail / Google Workspace</h3>
+    <table>
+        <tr><th>Host</th><td><code>smtp.gmail.com</code></td></tr>
+        <tr><th>Port</th><td><code>587</code></td></tr>
+        <tr><th>Encryption</th><td>STARTTLS</td></tr>
+        <tr><th>Username</th><td>your full Gmail / Workspace address</td></tr>
+        <tr><th>Password</th><td>a <strong>16-character app password</strong> (not your normal password)</td></tr>
+    </table>
+    <p>Generate an app password at <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">https://myaccount.google.com/apppasswords</a>.
+       2-step verification on the account is required to create one. App passwords show up like <code>abcd efgh ijkl mnop</code> — paste them with or without spaces, both work.</p>
+</div>
+
+<div class="card">
+    <h3>Transactional relay (SendGrid, Resend, Postmark, Mailgun, AWS SES)</h3>
+    <p>Sign up for any of these — they all have free tiers that cover homelab volume — and use the SMTP credentials they hand you. The pattern is always:</p>
+    <table>
+        <tr><th>Host</th><td>e.g. <code>smtp.sendgrid.net</code> / <code>smtp.resend.com</code> / <code>smtp.postmarkapp.com</code></td></tr>
+        <tr><th>Port</th><td><code>587</code> (STARTTLS) or <code>465</code> (TLS)</td></tr>
+        <tr><th>Username</th><td>literal string the provider tells you to use (often <code>apikey</code>)</td></tr>
+        <tr><th>Password</th><td>the API key the provider gave you</td></tr>
+    </table>
+    <p><strong>Why pick this:</strong> better deliverability than home-IP / consumer SMTP, no MFA / app-password dance, dedicated webhooks for bounces, and revocable per-app keys.</p>
+</div>
+{% endblock %}

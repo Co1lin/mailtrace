@@ -13,24 +13,27 @@ services:
       mailtrace-redis:
         condition: service_healthy
     environment:
-      # All app settings come from MAILTRACE_* env vars.
-      # Edit .env (copied from .env.example) to provide credentials.
+      # === Bootstrap (must be set before the app can start) ===
+      # The session secret is the only truly required env var.
+      MAILTRACE_SESSION_SECRET: ${MAILTRACE_SESSION_SECRET:?set MAILTRACE_SESSION_SECRET in .env}
+      # Bind / where to find the data backends.
       MAILTRACE_REDIS_URL: redis://mailtrace-redis:6379/0
       MAILTRACE_HOST: 0.0.0.0
       MAILTRACE_PORT: 8080
       MAILTRACE_WORKERS: ${MAILTRACE_WORKERS:-2}
-      MAILTRACE_BARCODE_ID: ${MAILTRACE_BARCODE_ID:-0}
-      MAILTRACE_SERVICE_TYPE_ID: ${MAILTRACE_SERVICE_TYPE_ID:-40}
-      MAILTRACE_MAILER_ID: ${MAILTRACE_MAILER_ID:?set MAILTRACE_MAILER_ID in .env}
-      MAILTRACE_USPS_CLIENT_ID: ${MAILTRACE_USPS_CLIENT_ID:?set MAILTRACE_USPS_CLIENT_ID in .env}
-      MAILTRACE_USPS_CLIENT_SECRET: ${MAILTRACE_USPS_CLIENT_SECRET:?set MAILTRACE_USPS_CLIENT_SECRET in .env}
-      MAILTRACE_BCG_USERNAME: ${MAILTRACE_BCG_USERNAME:-}
-      MAILTRACE_BCG_PASSWORD: ${MAILTRACE_BCG_PASSWORD:-}
-      MAILTRACE_SESSION_SECRET: ${MAILTRACE_SESSION_SECRET:?set MAILTRACE_SESSION_SECRET in .env}
       MAILTRACE_ROOT_PATH: ${MAILTRACE_ROOT_PATH:-}
-      MAILTRACE_TRUSTED_FEED_IPS: ${MAILTRACE_TRUSTED_FEED_IPS:-[]}
+      # Where the IV-MTR push receiver archives raw POSTed JSON for replay.
+      MAILTRACE_INGEST_ARCHIVE_DIR: ${MAILTRACE_INGEST_ARCHIVE_DIR:-/data/ingest_raw}
+      # Reverse-proxy IPs whose X-Forwarded-For we trust (logging only;
+      # auth on /usps_feed is HTTP Basic Auth, set in /admin/ingest).
+      MAILTRACE_TRUSTED_PROXIES: ${MAILTRACE_TRUSTED_PROXIES:-["127.0.0.1","::1"]}
       MAILTRACE_TIMEZONE: ${MAILTRACE_TIMEZONE:-UTC}
       TZ: ${MAILTRACE_TIMEZONE:-UTC}
+      # USPS API credentials are PER-USER, configured at /auth/account by
+      # each user — not in env. Platform admins manage SMTP / push-feed /
+      # poll cadence at /admin/email, /admin/ingest, /admin/settings.
+    volumes:
+      - mailtrace-data:/data
     ports:
       - "${MAILTRACE_BIND:-127.0.0.1:8084}:8080"
 
@@ -47,4 +50,5 @@ services:
       retries: 5
 
 volumes:
+  mailtrace-data:
   mailtrace-redis-data:

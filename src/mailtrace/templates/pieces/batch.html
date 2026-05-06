@@ -1,0 +1,61 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - stock batch{% endblock %}
+{% block body %}
+<h1>Stock batch</h1>
+<p class="lede">Generate IMbs in bulk for known recipients — one row per recipient with a count.
+   They land in <strong>Stock</strong> state (no polling). Print them onto sticker
+   sheets, peel-and-stick to envelopes as you go, then click <em>Mark mailed</em> on
+   the piece (or in bulk) when you actually drop one in the box.</p>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+
+<div class="card">
+<form method="POST" action="/pieces/batch">
+<table>
+    <thead><tr>
+        <th>#</th><th>Label</th><th>Sender</th><th>Recipient</th><th>Count</th><th>ZIP-in-IMb</th>
+    </tr></thead>
+    <tbody>
+    {% for i in range(row_count) %}
+    <tr>
+        <td>{{ i + 1 }}</td>
+        <td><input type="text" name="row-{{ i }}-label" maxlength="80" placeholder="optional"></td>
+        <td>
+            <select name="row-{{ i }}-sender_id">
+                <option value="">—</option>
+                {% for a in addresses if a.role in ('sender', 'both') %}
+                <option value="{{ a.id }}">{{ a.label }}</option>
+                {% endfor %}
+            </select>
+        </td>
+        <td>
+            <select name="row-{{ i }}-recipient_id">
+                <option value="">—</option>
+                {% for a in addresses if a.role in ('recipient', 'both') %}
+                <option value="{{ a.id }}">{{ a.label }}</option>
+                {% endfor %}
+            </select>
+        </td>
+        <td><input type="number" name="row-{{ i }}-count" min="1" max="50" value="1" style="width:5em"></td>
+        <td style="text-align:center">
+            <input type="checkbox" name="row-{{ i }}-include_zip" value="on" checked>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+<p>
+    <label>
+        <input type="checkbox" name="mark_as_mailed" value="true">
+        Mark all created pieces as <em>mailed</em> immediately (start polling now)
+    </label>
+    <br><small>Default: leave them as stock. Check this only if you're creating pieces for letters you've already sent.</small>
+</p>
+<p>
+    <button type="submit">Generate stock</button>
+    <a href="/pieces/">Cancel</a>
+</p>
+</form>
+</div>
+
+<p><small>Need a recipient that isn't in your address book yet? <a href="/addresses/new">Add it first</a>, then come back here.</small></p>
+{% endblock %}

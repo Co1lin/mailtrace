@@ -6,12 +6,20 @@
     <title>{% block title %}mailtrace{% endblock %}</title>
     <style>
         body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-               max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+               max-width: 880px; margin: 0 auto; padding: 0 1rem 2rem; color: #222; }
+        nav { display: flex; gap: 1rem; align-items: center; padding: 0.75rem 0;
+              border-bottom: 1px solid #eee; margin-bottom: 1.5rem; flex-wrap: wrap; }
+        nav .brand { font-weight: 700; }
+        nav a { color: #1f6feb; text-decoration: none; }
+        nav a:hover { text-decoration: underline; }
+        nav .spacer { flex: 1; }
+        nav form { margin: 0; }
+        nav button.linklike { background: none; border: 0; color: #1f6feb; cursor: pointer; padding: 0; font: inherit; }
         h1 { margin-bottom: 0.25rem; }
         .lede { color: #666; margin-top: 0; }
         .card { border: 1px solid #ddd; border-radius: 8px; padding: 1.25rem; margin: 1rem 0; }
         label { display: block; margin: 0.6rem 0 0.2rem; font-weight: 600; font-size: 0.9rem; }
-        input[type=text], input[type=number], textarea {
+        input[type=text], input[type=email], input[type=password], input[type=number], textarea, select {
             width: 100%; padding: 0.45rem; border: 1px solid #ccc; border-radius: 4px;
             font-size: 0.95rem; box-sizing: border-box;
         }
@@ -20,18 +28,38 @@
             border-radius: 4px; cursor: pointer; font-size: 0.95rem;
         }
         button.secondary { background: #555; }
+        button.danger { background: #b00; }
         .row { display: flex; gap: 0.5rem; }
         .row > * { flex: 1; }
         a { color: #1f6feb; }
         small { color: #666; }
         table { border-collapse: collapse; width: 100%; }
-        th, td { border: 1px solid #ddd; padding: 0.4rem 0.5rem; text-align: left; font-size: 0.85rem; }
+        th, td { border: 1px solid #ddd; padding: 0.4rem 0.5rem; text-align: left; font-size: 0.9rem; vertical-align: top; }
         th { background: #f5f5f5; }
         .err { color: #b00; }
+        .ok { color: #197b30; }
+        .pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; background: #eee; font-size: 0.8rem; }
+        .pill.admin { background: #ffe4b5; }
+        .pill.inactive { background: #f5b7b1; }
+        .flash { padding: 0.75rem; border-radius: 6px; background: #fff5d6; border: 1px solid #f0c36d; margin: 1rem 0; }
+        code { background: #f5f5f5; padding: 0.1rem 0.3rem; border-radius: 3px; }
     </style>
     {% block head %}{% endblock %}
 </head>
 <body>
+{% if user is defined and user %}
+<nav>
+    <span class="brand">mailtrace</span>
+    <a href="/">Home</a>
+    <a href="/pieces/">Pieces</a>
+    <a href="/addresses/">Addresses</a>
+    {% if user.is_admin %}<a href="/admin/">Admin</a>{% endif %}
+    <span class="spacer"></span>
+    <small>{{ user.email }}</small>
+    <a href="/auth/account">Account</a>
+    <form method="POST" action="/auth/logout"><button class="linklike" type="submit">Log out</button></form>
+</nav>
+{% endif %}
 {% block body %}{% endblock %}
 </body>
 </html>

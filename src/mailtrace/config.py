@@ -1,4 +1,11 @@
-"""Application configuration loaded from environment variables / .env."""
+"""Bootstrap configuration loaded from environment variables / .env.
+
+This module covers ONLY the values that must be available before the app
+can start at all (DB / Redis URLs, session secret, host/port, infra paths).
+Everything else — USPS credentials, poll cadence, etc. — lives in the
+`AppConfig` DB singleton and is editable from /admin/settings without a
+restart. See `models.AppConfig` for what moved.
+"""
 
 from __future__ import annotations
 
@@ -9,11 +16,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """All runtime config is provided through `MAILTRACE_*` env vars.
+    """Bootstrap-time config from `MAILTRACE_*` env vars.
 
-    See `.env.example` for the full list. Defaults are chosen so the
-    application starts (with a clear error from USPS) even before
-    credentials are configured, which simplifies smoke-testing in Docker.
+    See `.env.example` for the full list and `/admin/settings` for the
+    runtime config (USPS API creds, poll cadence, …) that lives in the DB.
     """
 
     model_config = SettingsConfigDict(
@@ -23,41 +29,36 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # IMb identity (issued by USPS Business Customer Gateway)
-    barcode_id: int = Field(0, ge=0, le=99)
-    service_type_id: int = Field(40, ge=0, le=999)
-    mailer_id: int = Field(0, description="6- or 9-digit USPS Mailer ID")
+    # ---- truly required at boot ----
+    # Signs the session cookie. Without it the app can't authenticate the
+    # admin who would log in to set anything else, so this is the one
+    # value that genuinely must come from env.
+    session_secret: SecretStr = SecretStr("change-me")
 
-    # USPS API credentials (apis.usps.com)
-    usps_client_id: SecretStr = SecretStr("")
-    usps_client_secret: SecretStr = SecretStr("")
-
-    # Business Customer Gateway (legacy IV oauth)
-    bcg_username: SecretStr = SecretStr("")
-    bcg_password: SecretStr = SecretStr("")
+    # Persistent storage. SQLite by default; swap the URL to point at a
+    # mounted volume in production. Use sqlite+aiosqlite for the async
+    # driver. For Postgres: postgresql+asyncpg://...
+    database_url: str = "sqlite+aiosqlite:///./data/mailtrace.db"
 
     # Redis
     redis_url: str = "redis://redis:6379/0"
 
-    # Web app
-    session_secret: SecretStr = SecretStr("change-me")
+    # Mount the app under a subpath (FastAPI applies this at construction
+    # time, so it has to be set before the lifespan runs).
     root_path: str = ""
 
-    # /usps_feed access control. Defaults are fail-closed: only requests from
-    # trusted_proxies are accepted, and the X-Forwarded-For header is only
-    # honored when the immediate caller is in trusted_proxies. Set
-    # feed_open=True to disable the check entirely (do NOT do this on the
-    # public internet).
-    trusted_feed_ips: list[str] = Field(default_factory=list)
+    # ---- infrastructure (boot time, rarely changed) ----
+    # Where /usps_feed archives raw POSTed JSON for audit / replay.
+    ingest_archive_dir: str = "./data/ingest_raw"
+    # Caddy / front-of-LB IP(s). When the immediate peer is in this list,
+    # X-Forwarded-For is honored for source-IP logging on /usps_feed.
+    # Pure operational; auth is Basic Auth.
     trusted_proxies: list[str] = Field(default_factory=lambda: ["127.0.0.1", "::1"])
-    feed_open: bool = False
-
-    # Operational
+    # Store-level tuning (Redis serial allocator). Almost never changed.
     serial_rolling_window: int = 50
     feed_event_ttl_seconds: int = 60 * 24 * 60 * 60  # 60 days
-    timezone: str = "UTC"
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]  # values come from env at construction
+    return Settings()

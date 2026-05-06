@@ -1,0 +1,52 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - edit user{% endblock %}
+{% block body %}
+<h1>Edit user · {{ target.email }}</h1>
+<p><a href="/admin/">&larr; back to user list</a></p>
+
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+
+<div class="card">
+    <h2>Profile</h2>
+    <form method="POST" action="/admin/users/{{ target.id }}/edit">
+        <label>Email</label>
+        <input type="email" name="email" required value="{{ target.email }}">
+
+        <label>Mailer ID <small>(blank to clear)</small></label>
+        <input type="text" name="mailer_id" pattern="\d*" inputmode="numeric" value="{{ target.mailer_id or '' }}">
+
+        <div class="row">
+            <div>
+                <label>Barcode ID (0-99)</label>
+                <input type="number" name="barcode_id" min="0" max="99" value="{{ target.barcode_id }}">
+            </div>
+            <div>
+                <label>Service Type ID (0-999)</label>
+                <input type="number" name="service_type_id" min="0" max="999" value="{{ target.service_type_id }}">
+            </div>
+        </div>
+
+        <p><button type="submit">Save</button></p>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Reset password</h2>
+    <p class="lede">Pick your own password or leave blank to generate a random one. Either way, the user will be forced to change it on next login.</p>
+    <form method="POST" action="/admin/users/{{ target.id }}/force-reset">
+        <label>Custom password <small>(optional, ≥ 10 characters)</small></label>
+        <input type="text" name="custom_password" minlength="10" autocomplete="off">
+        <p><button class="secondary" type="submit">Reset password</button></p>
+    </form>
+</div>
+
+<div class="card">
+    <h2 class="err">Danger zone</h2>
+    <p>Hard-delete this user and all of their addresses.
+    {% if target.id == user.id %}You cannot delete yourself.{% endif %}</p>
+    <form method="POST" action="/admin/users/{{ target.id }}/delete"
+          onsubmit="return confirm('Permanently delete {{ target.email }} and all of their data? This cannot be undone.')">
+        <button class="danger" type="submit" {% if target.id == user.id %}disabled{% endif %}>Delete user</button>
+    </form>
+</div>
+{% endblock %}

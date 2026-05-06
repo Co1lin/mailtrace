@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{{ layout.name }} · {{ pages|length }} page(s)</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; }
+@font-face {
+    font-family: 'USPSIMBStandard';
+    src: url({{ imb_font_data_uri }}) format('truetype');
+    font-weight: normal;
+    font-style: normal;
+}
+.page {
+    width: 8.5in;
+    height: 11in;
+    padding: 0;
+    page-break-after: always;
+    position: relative;
+}
+.page:last-child { page-break-after: auto; }
+.label {
+    position: absolute;
+    padding: 0.1in;
+    overflow: hidden;
+}
+.usps-barcode {
+    font-family: "USPSIMBStandard";
+    font-size: 16pt;
+    margin-bottom: 0.05in;
+}
+.barcode-humanreadable { font-size: 9pt; }
+.recipient-text {
+    font-family: "DejaVu Serif", serif;
+    white-space: pre-line;
+    font-size: 11pt;
+}
+</style>
+</head>
+<body>
+{% for cells in pages %}
+<div class="page">
+    {% for cell in cells %}
+    <div class="label" style="top: {{ '%.3f'|format(cell.top_in) }}in;
+                              left: {{ '%.3f'|format(cell.left_in) }}in;
+                              width: {{ layout.label_width_in }}in;
+                              height: {{ layout.label_height_in }}in;">
+        <div class="usps-barcode">{{ cell.piece.imb_letters }}</div>
+        <div class="barcode-humanreadable">{{ cell.piece.human_readable_imb() }}</div>
+        <div class="recipient-text">{{ cell.piece.recipient_block }}</div>
+    </div>
+    {% endfor %}
+</div>
+{% endfor %}
+</body>
+</html>

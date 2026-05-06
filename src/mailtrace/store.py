@@ -103,3 +103,50 @@ class Store:
             await self._redis.set(key, value, ex=ttl_seconds)
         else:
             await self._redis.set(key, value)
+
+    # ------------------------------------------------------------------
+    # Distributed locks (used to elect a single "background-task leader"
+    # across uvicorn workers / replicas).
+    # ------------------------------------------------------------------
+
+    # Acquire-or-renew: SET if either the key is empty OR its current value
+    # is our holder_id. Always (re)applies the TTL so a leader that keeps
+    # calling this never loses the lock to expiry. Other holders get
+    # rejected without disturbing the existing lock.
+    _ACQUIRE_OR_RENEW_LUA = """
+    local current = redis.call('GET', KEYS[1])
+    if (not current) or current == ARGV[1] then
+        redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+        return 1
+    end
+    return 0
+    """
+
+    _RELEASE_IF_OWNER_LUA = """
+    if redis.call('GET', KEYS[1]) == ARGV[1] then
+        return redis.call('DEL', KEYS[1])
+    end
+    return 0
+    """
+
+    async def acquire_or_renew_leader(self, key: str, holder_id: str, ttl_seconds: int) -> bool:
+        """Atomic acquire-or-renew of a Redis-based lock.
+
+        Returns True iff the caller now holds the lock — either acquired
+        fresh (no prior holder) or refreshed (we were already the holder
+        and the TTL just got bumped). False means another holder owns it.
+
+        Use this for "exactly one worker runs this loop" patterns: every
+        iteration, call this; only act if it returns True.
+        """
+        result: Any = await self._redis.eval(  # type: ignore[no-untyped-call]
+            self._ACQUIRE_OR_RENEW_LUA, 1, key, holder_id, ttl_seconds
+        )
+        return int(result) == 1
+
+    async def release_leader(self, key: str, holder_id: str) -> None:
+        """Release the lock iff our holder_id still owns it. No-op
+        otherwise — never blow away someone else's lock."""
+        await self._redis.eval(  # type: ignore[no-untyped-call]
+            self._RELEASE_IF_OWNER_LUA, 1, key, holder_id
+        )

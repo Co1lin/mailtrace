@@ -41,10 +41,15 @@ WORKDIR /app
 
 COPY --from=builder --chown=mailtrace:mailtrace /app /app
 
+# Persistent state (SQLite DB) lives here. Mount this in compose.
+RUN mkdir -p /data && chown mailtrace:mailtrace /data
+ENV MAILTRACE_DATABASE_URL=sqlite+aiosqlite:////data/mailtrace.db
+VOLUME ["/data"]
+
 USER mailtrace
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${MAILTRACE_PORT}/healthz" || exit 1
 
-CMD ["python", "-m", "mailtrace"]
+CMD ["python", "-m", "mailtrace", "serve"]

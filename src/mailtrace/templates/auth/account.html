@@ -1,0 +1,178 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - setup &amp; account{% endblock %}
+{% block body %}
+<h1>Setup &amp; Account</h1>
+<p class="lede">Configure your tenant on this mailtrace instance. Each
+   user brings their own USPS app keys and (optionally) BCG account, so
+   USPS quota / rate-limits / data attribution are scoped to you, not
+   shared with other users on this platform.</p>
+
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+
+<div class="card">
+    <h2>Setup status</h2>
+    <ul>
+        <li>Mailer ID:
+            {% if mid_set %}<span class="pill">configured ({{ user.mailer_id }})</span>
+            {% else %}<span class="pill inactive">required — needed to create pieces</span>
+            {% endif %}
+        </li>
+        <li>USPS API credentials (address validation):
+            {% if usps_api_set %}
+              <span class="pill">configured</span>
+              {% if user.usps_api_last_check == 'ok' %} <span class="pill">last test ✓</span>
+              {% elif user.usps_api_last_check.startswith('fail') %} <span class="pill inactive">last test ✗</span>
+              {% endif %}
+            {% else %}<span class="pill inactive">optional — validate button is off without it</span>
+            {% endif %}
+        </li>
+        <li>BCG credentials (legacy pull-tracking):
+            {% if bcg_set %}
+              <span class="pill">configured</span>
+              {% if user.bcg_last_check == 'ok' %} <span class="pill">last test ✓</span>
+              {% elif user.bcg_last_check.startswith('fail') %} <span class="pill inactive">last test ✗</span>
+              {% endif %}
+            {% else %}<span class="pill inactive">optional — set only if you want pull-tracking</span>
+            {% endif %}
+        </li>
+        <li>Notifications:
+            {% if user.notify_on_scans %}<span class="pill">on</span>
+            {% else %}<span class="pill inactive">off</span>{% endif %}
+        </li>
+    </ul>
+</div>
+
+<form method="POST" action="/auth/account">
+<div class="card">
+    <h2>1 · Mailer ID <small>(required)</small></h2>
+    <p class="lede">Your USPS-issued Mailer ID, found in your Business
+       Customer Gateway account at
+       <a href="https://gateway.usps.com/" target="_blank" rel="noopener">gateway.usps.com</a>
+       under <em>Mailing Services → Mailer ID</em>. Required to create
+       any mail piece. Two users can never share a MID — that would
+       collide on USPS's <code>(MID, serial)</code> keyspace.</p>
+    <label>Email <small>(read-only)</small></label>
+    <input type="text" value="{{ user.email }}" disabled>
+    <label>Mailer ID</label>
+    <input type="text" name="mailer_id" pattern="\d*" value="{{ user.mailer_id or '' }}" placeholder="e.g. 123456 or 900000001">
+    <div class="row">
+        <div>
+            <label>Barcode ID (0–99)</label>
+            <input type="number" name="barcode_id" min="0" max="99" value="{{ user.barcode_id }}">
+        </div>
+        <div>
+            <label>Service Type ID (0–999)</label>
+            <input type="number" name="service_type_id" min="0" max="999" value="{{ user.service_type_id }}">
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>2 · USPS API credentials <small>(optional, recommended)</small></h2>
+    <p class="lede">For the in-page <em>Validate against USPS</em> button on
+       piece / address forms. Without these, the button returns an error
+       but you can still type addresses by hand.</p>
+    <details>
+        <summary>How to get them (5 min)</summary>
+        <ol>
+            <li>You need a BCG account first — <a href="https://gateway.usps.com/" target="_blank" rel="noopener">gateway.usps.com</a>, sign up for a Business Account.</li>
+            <li>Go to <a href="https://developer.usps.com/" target="_blank" rel="noopener">developer.usps.com</a> and sign in with your BCG account.</li>
+            <li><em>Add App</em> → name it "mailtrace" → enable <strong>Addresses 3.0</strong>.</li>
+            <li>Save. The app's detail page shows a <strong>Consumer Key</strong> and <strong>Consumer Secret</strong>.</li>
+            <li>Paste them below. (USPS' edge can take ~10 min to propagate; if a Test fails right after creating the app, wait and retry.)</li>
+        </ol>
+    </details>
+
+    <label>Client ID <small>(Consumer Key)</small></label>
+    <input type="text" name="usps_client_id" value="{{ user.usps_client_id }}" autocomplete="off" placeholder="from developer.usps.com">
+
+    <label>Client Secret
+        {% if user.usps_client_secret %}<small>(stored)</small>{% endif %}
+    </label>
+    <input type="password" name="usps_client_secret" autocomplete="new-password"
+           placeholder="{{ '•••••• (already saved; leave-unchanged checked below to keep)' if user.usps_client_secret else 'Consumer Secret' }}">
+    {% if user.usps_client_secret %}
+    <label><input type="checkbox" name="leave_usps_secret_unchanged" value="true" checked> Keep existing secret</label>
+    {% endif %}
+    {% if user.usps_api_last_check.startswith('fail') %}
+    <p class="err"><small>Last test failed: {{ user.usps_api_last_check[6:] }}</small></p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>3 · BCG credentials <small>(optional, only if you want pull-tracking)</small></h2>
+    <p class="lede">Used by the platform's background poller to fetch
+       scan history from USPS' <em>legacy</em> IV-MTR pull API on your
+       behalf. <strong>Skip this section if your scans come via the
+       platform's push receiver</strong> — the modern alternative
+       requires no per-user USPS credentials.</p>
+    <p class="lede"><small>USPS' legacy IV-MTR pull API only accepts
+       OAuth2 password grant — there is no API-key equivalent. These
+       are your literal username and password from
+       <a href="https://gateway.usps.com/" target="_blank" rel="noopener">gateway.usps.com</a>.
+       They're stored in the platform DB; rotate by changing your BCG
+       password and updating this field.</small></p>
+
+    <label>BCG username</label>
+    <input type="text" name="bcg_username" value="{{ user.bcg_username }}" autocomplete="off" placeholder="leave blank to skip pull-tracking">
+
+    <label>BCG password
+        {% if user.bcg_password %}<small>(stored)</small>{% endif %}
+    </label>
+    <input type="password" name="bcg_password" autocomplete="new-password"
+           placeholder="{{ '•••••• (already saved; leave-unchanged checked below to keep)' if user.bcg_password else 'gateway.usps.com password' }}">
+    {% if user.bcg_password %}
+    <label><input type="checkbox" name="leave_bcg_password_unchanged" value="true" checked> Keep existing password</label>
+    {% endif %}
+    {% if user.bcg_last_check.startswith('fail') %}
+    <p class="err"><small>Last test failed: {{ user.bcg_last_check[6:] }}</small></p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>4 · Email notifications</h2>
+    <p class="lede">When new scans arrive on your pieces, the platform
+       can send you a digest. SMTP is configured by the platform admin
+       at <code>/admin/email</code>; if it's not set up, this toggle has
+       no effect.</p>
+    <label>
+        <input type="checkbox" name="notify_on_scans" value="true" {% if user.notify_on_scans %}checked{% endif %}>
+        Email me when scans arrive
+    </label>
+    <label>Send to <small>(optional override; defaults to {{ user.email }})</small></label>
+    <input type="email" name="notify_email" value="{{ user.notify_email or '' }}" placeholder="{{ user.email }}">
+</div>
+
+<p><button type="submit">Save all sections</button></p>
+</form>
+
+<div class="card">
+    <h2>Test your setup</h2>
+    <p class="lede">Each test calls USPS (or SMTP) using only your saved
+       credentials and reports the result. Run them after saving to
+       verify the config end-to-end before creating real pieces.</p>
+    <div class="row">
+        <div>
+            <form method="POST" action="/auth/account/test-usps-api" style="display:inline">
+                <button class="secondary" type="submit" {% if not usps_api_set %}disabled title="Set USPS API credentials first"{% endif %}>Test USPS API</button>
+            </form>
+        </div>
+        <div>
+            <form method="POST" action="/auth/account/test-bcg" style="display:inline">
+                <button class="secondary" type="submit" {% if not bcg_set %}disabled title="Set BCG credentials first"{% endif %}>Test BCG (pull-tracking)</button>
+            </form>
+        </div>
+        <div>
+            <form method="POST" action="/auth/account/test-notify" style="display:inline">
+                <button class="secondary" type="submit" {% if not user.notify_on_scans %}disabled title="Enable email notifications first"{% endif %}>Send test notification</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Password</h2>
+    <p><a href="/auth/change-password">Change password</a></p>
+</div>
+{% endblock %}

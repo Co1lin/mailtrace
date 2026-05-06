@@ -1,0 +1,117 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - piece #{{ piece.id }}{% endblock %}
+{% block body %}
+<h1>Piece #{{ piece.id }} {% if piece.label %}— {{ piece.label }}{% endif %}</h1>
+<p><a href="/pieces/">&larr; back to list</a></p>
+
+{% set flash = request.session.pop('piece_flash', None) %}
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
+<div class="card">
+    <h2>Identity</h2>
+    <p><strong>Status:</strong> <span class="pill">{{ piece.status }}</span>
+       {% if piece.archived_at %} <span class="pill inactive">archived</span>{% endif %}</p>
+    <p><strong>IMb:</strong> <code>{{ piece.human_readable_imb() }}</code></p>
+    <p><strong>Lookup key:</strong> <code>{{ piece.imb_raw }}</code>
+       (<small>{{ 'with' if piece.include_zip_in_imb else 'without' }} ZIP</small>)</p>
+    <p><strong>Created:</strong> {{ piece.created_at.strftime('%Y-%m-%d %H:%M %Z') }}
+       {%- if piece.printed_at %} · <strong>Printed:</strong> {{ piece.printed_at.strftime('%Y-%m-%d %H:%M %Z') }}{% endif -%}
+       {%- if piece.mailed_at %} · <strong>Mailed:</strong> {{ piece.mailed_at.strftime('%Y-%m-%d %H:%M %Z') }}{% endif %}
+    </p>
+    <p><strong>Last polled:</strong>
+       {{ piece.last_polled_at.strftime('%Y-%m-%d %H:%M %Z') if piece.last_polled_at else '—' }}
+       (next at {{ piece.next_poll_at.strftime('%Y-%m-%d %H:%M %Z') if piece.next_poll_at else 'never' }})
+    </p>
+    {% if not piece.archived_at and piece.status in ('generated', 'printed') %}
+    <p>
+        {% if piece.status == 'generated' %}
+        <form method="POST" action="/pieces/{{ piece.id }}/mark-printed" style="display:inline">
+            <button class="secondary" type="submit">Mark printed</button>
+        </form>
+        {% endif %}
+        <form method="POST" action="/pieces/{{ piece.id }}/mark-mailed" style="display:inline">
+            <button type="submit">Mark mailed (start tracking)</button>
+        </form>
+    </p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Addresses</h2>
+    <div class="row">
+        <div>
+            <label>Sender</label>
+            <pre style="white-space:pre-wrap;font-family:inherit">{{ piece.sender_block or '(none)' }}</pre>
+        </div>
+        <div>
+            <label>Recipient</label>
+            <pre style="white-space:pre-wrap;font-family:inherit">{{ piece.recipient_block }}</pre>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Print</h2>
+    <p>
+        <a href="/pieces/{{ piece.id }}/download/envelope.pdf">Envelope PDF</a>
+        &middot;
+        <a href="/pieces/{{ piece.id }}/download/envelope.html">Envelope HTML</a>
+    </p>
+    <form action="/pieces/{{ piece.id }}/download/avery.pdf" method="get">
+        <div class="row">
+            <div><label>Avery row (1-5)</label><input type="number" name="row" min="1" max="5" value="1"></div>
+            <div><label>Avery col (1-2)</label><input type="number" name="col" min="1" max="2" value="1"></div>
+        </div>
+        <p><button type="submit" class="secondary">Avery 8163 PDF</button></p>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Scans <small>({{ piece.scans|length }})</small></h2>
+    <form method="POST" action="/pieces/{{ piece.id }}/refresh" style="display:inline">
+        <button class="secondary" type="submit">Refresh now</button>
+    </form>
+    {% if not piece.scans %}
+    <p class="lede">No scans yet. The poller will pick this up automatically.</p>
+    {% else %}
+    <table>
+        <thead><tr>
+            <th>Scanned</th><th>Code</th><th>Type</th><th>Phase</th><th>Facility</th>
+            <th>City</th><th>State</th><th>ZIP</th><th>Source</th>
+        </tr></thead>
+        <tbody>
+        {% for s in piece.scans %}
+        <tr>
+            <td>{{ s.scanned_at.strftime('%Y-%m-%d %H:%M') if s.scanned_at else '—' }}</td>
+            <td>{{ s.event_code or '—' }}</td>
+            <td>{{ s.handling_event_type or '—' }}</td>
+            <td>{{ s.mail_phase or '—' }}</td>
+            <td>{{ s.facility_name or '—' }}</td>
+            <td>{{ s.facility_city or '—' }}</td>
+            <td>{{ s.facility_state or '—' }}</td>
+            <td>{{ s.facility_zip or '—' }}</td>
+            <td><small>{{ s.source }}</small></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Lifecycle</h2>
+    {% if piece.archived_at %}
+    <form method="POST" action="/pieces/{{ piece.id }}/unarchive" style="display:inline">
+        <button class="secondary" type="submit">Unarchive</button>
+    </form>
+    {% else %}
+    <form method="POST" action="/pieces/{{ piece.id }}/archive" style="display:inline">
+        <button class="secondary" type="submit">Archive</button>
+    </form>
+    {% endif %}
+    <form method="POST" action="/pieces/{{ piece.id }}/delete" style="display:inline"
+          onsubmit="return confirm('Permanently delete this piece and its {{ piece.scans|length }} scan(s)? This cannot be undone.')">
+        <button class="danger" type="submit">Delete</button>
+    </form>
+</div>
+{% endblock %}

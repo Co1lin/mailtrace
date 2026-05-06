@@ -1,0 +1,74 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - CSV import{% endblock %}
+{% block body %}
+<h1>Bulk import (CSV)</h1>
+<p class="lede">Paste a CSV with one row per recipient. Each row creates one
+   mail piece; optionally also save the recipient as an address-book entry
+   you can reuse later.</p>
+
+{% if error %}<div class="flash"><strong>Import failed.</strong><br><pre style="white-space:pre-wrap;margin:0">{{ error }}</pre></div>{% endif %}
+
+{% if results %}
+<div class="flash">
+    <strong>Imported {{ results.created }} piece(s).</strong>
+    {% if results.saved_addresses %} Saved {{ results.saved_addresses }} new address(es) to your address book.{% endif %}
+    {% if results.unknown_columns %}
+    <br><small>Ignored unknown columns: {{ results.unknown_columns | join(', ') }}.</small>
+    {% endif %}
+    {% if results.errors %}
+    <details><summary>{{ results.errors|length }} row(s) had problems</summary>
+    <pre style="white-space:pre-wrap;margin:0">{% for e in results.errors %}{{ e }}
+{% endfor %}</pre>
+    </details>
+    {% endif %}
+    <p><a href="/pieces/">View pieces →</a></p>
+</div>
+{% endif %}
+
+<div class="card">
+<form method="POST" action="/pieces/import">
+    <h2>Sender</h2>
+    <label>Pick a saved sender <small>(optional; leave blank for no sender block on the envelope)</small></label>
+    <select name="sender_address_id">
+        <option value="">— none —</option>
+        {% for a in addresses if a.role in ('sender', 'both') %}
+        <option value="{{ a.id }}">{{ a.label }}</option>
+        {% endfor %}
+    </select>
+
+    <h2>Recipients (CSV)</h2>
+    <p><strong>Required columns:</strong> {{ required_fields | join(', ') }}.<br>
+       <strong>Optional columns:</strong> label, name, company, address2, include_zip_in_imb.<br>
+       <small>Column order doesn't matter; the first row must be the header. Unknown columns are ignored.</small></p>
+    <details>
+        <summary>Show example CSV</summary>
+<pre style="white-space:pre-wrap">label,name,company,street,address2,city,state,zip,include_zip_in_imb
+holiday card 1,Alice Wong,,123 Main St,,Springfield,IL,62701,true
+holiday card 2,Bob Smith,Acme Co,456 Oak Ave,Suite 100,Anytown,CA,94105,true
+holiday card 3,Carol,,789 Pine Rd,,Pasadena,CA,91101,false
+</pre>
+    </details>
+    <label>CSV</label>
+    <textarea name="csv_text" rows="12" required placeholder="paste your CSV here"></textarea>
+
+    <h2>Options</h2>
+    <label>
+        <input type="checkbox" name="save_addresses" value="true">
+        Also save each recipient to the address book (under their CSV label, or auto-generated if blank)
+    </label>
+    <label>
+        <input type="checkbox" name="include_zip_in_imb" value="true" checked>
+        Include recipient ZIP in the IMb routing code by default
+        <small>(per-row <code>include_zip_in_imb</code> column overrides this)</small>
+    </label>
+    <label>
+        <input type="checkbox" name="mark_as_mailed" value="true">
+        Mark all imported pieces as <em>mailed</em> immediately (start polling now)
+    </label>
+    <p><small>Default: imported pieces are stock — print them onto stickers, then
+       mark them mailed individually as you actually drop them in the box.</small></p>
+
+    <p><button type="submit">Import</button> <a href="/pieces/">Cancel</a></p>
+</form>
+</div>
+{% endblock %}

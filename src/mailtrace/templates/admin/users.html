@@ -1,0 +1,69 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - admin{% endblock %}
+{% block body %}
+<h1>Admin · users</h1>
+<p>
+    <a href="/admin/settings">Application settings →</a>
+    &nbsp;·&nbsp;
+    <a href="/admin/email">SMTP / email →</a>
+    &nbsp;·&nbsp;
+    <a href="/admin/ingest">USPS push feed (IV-MTR) →</a>
+</p>
+
+{% if flash_temp_password %}
+<div class="flash">
+    Temporary password for <strong>{{ flash_temp_password_email }}</strong>:
+    <code>{{ flash_temp_password }}</code><br>
+    Send this to them out-of-band; they will be required to change it on first login.
+    This will only be shown once.
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Invite a user</h2>
+    <form method="POST" action="/admin/users">
+        <label>Email</label>
+        <input type="email" name="email" required>
+        <label>Mailer ID <small>(optional, the user can set it later)</small></label>
+        <input type="text" name="mailer_id" pattern="\d*">
+        <label><input type="checkbox" name="is_admin" value="true"> Make this user an admin</label>
+        <p><button type="submit">Create user</button></p>
+    </form>
+</div>
+
+<div class="card">
+    <h2>All users</h2>
+    <table>
+        <thead><tr>
+            <th>Email</th><th>MID</th><th>Status</th><th>Last login</th><th>Actions</th>
+        </tr></thead>
+        <tbody>
+        {% for u in users %}
+        <tr>
+            <td>
+                {{ u.email }}
+                {% if u.is_admin %}<span class="pill admin">admin</span>{% endif %}
+                {% if not u.is_active %}<span class="pill inactive">inactive</span>{% endif %}
+                {% if u.must_change_password %}<span class="pill">must reset</span>{% endif %}
+            </td>
+            <td>{{ u.mailer_id or '—' }}</td>
+            <td>{{ 'active' if u.is_active else 'inactive' }}</td>
+            <td>{{ u.last_login_at.strftime('%Y-%m-%d %H:%M') if u.last_login_at else '—' }}</td>
+            <td>
+                <a href="/admin/users/{{ u.id }}/edit">Edit</a>
+                <form method="POST" action="/admin/users/{{ u.id }}/force-reset" style="display:inline">
+                    <button class="secondary" type="submit" onclick="return confirm('Generate a new temporary password for {{ u.email }}?')">Force reset</button>
+                </form>
+                <form method="POST" action="/admin/users/{{ u.id }}/toggle-active" style="display:inline">
+                    <button class="secondary" type="submit">{{ 'Deactivate' if u.is_active else 'Reactivate' }}</button>
+                </form>
+                <form method="POST" action="/admin/users/{{ u.id }}/toggle-admin" style="display:inline">
+                    <button class="secondary" type="submit">{{ 'Demote' if u.is_admin else 'Promote' }}</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

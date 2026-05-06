@@ -1,0 +1,27 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - addresses{% endblock %}
+{% block body %}
+<h1>Addresses</h1>
+<p><a href="/addresses/new">+ New address</a></p>
+{% if not addresses %}
+<p class="lede">No addresses yet.</p>
+{% else %}
+<table>
+    <thead><tr><th>Label</th><th>Role</th><th>Block</th><th></th></tr></thead>
+    <tbody>
+    {% for a in addresses %}
+    <tr>
+        <td><a href="/addresses/{{ a.id }}">{{ a.label }}</a></td>
+        <td>{{ a.role }}</td>
+        <td><pre style="margin:0;font-family:inherit;white-space:pre-wrap">{{ a.to_recipient_block() }}</pre></td>
+        <td>
+            <form method="POST" action="/addresses/{{ a.id }}/delete" style="display:inline">
+                <button class="danger" type="submit" onclick="return confirm('Delete this address?')">Delete</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{% endblock %}

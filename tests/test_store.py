@@ -44,3 +44,57 @@ async def test_serial_overflow_raises(store: Store) -> None:
     await store._redis.set(key, 9998)  # type: ignore[attr-defined]
     with pytest.raises(RuntimeError):
         await store.next_serial(today=today)
+
+
+# ---------------------------------------------------------------------------
+# Distributed leader-election lock (used by the background poll loop so
+# that only ONE uvicorn worker / replica runs the cycle at a time).
+# ---------------------------------------------------------------------------
+
+
+async def test_leader_lock_first_acquirer_wins(store: Store) -> None:
+    key = "test:leader"
+    assert await store.acquire_or_renew_leader(key, "worker-A", ttl_seconds=60) is True
+    # A different worker can't take it while A holds it.
+    assert await store.acquire_or_renew_leader(key, "worker-B", ttl_seconds=60) is False
+
+
+async def test_leader_lock_owner_can_renew(store: Store) -> None:
+    key = "test:leader"
+    assert await store.acquire_or_renew_leader(key, "worker-A", ttl_seconds=60) is True
+    # A can re-call to extend its own TTL — still True, no contention.
+    assert await store.acquire_or_renew_leader(key, "worker-A", ttl_seconds=60) is True
+    # B still locked out.
+    assert await store.acquire_or_renew_leader(key, "worker-B", ttl_seconds=60) is False
+
+
+async def test_leader_lock_release_lets_peer_acquire(store: Store) -> None:
+    key = "test:leader"
+    assert await store.acquire_or_renew_leader(key, "worker-A", ttl_seconds=60) is True
+    await store.release_leader(key, "worker-A")
+    # After release, B can take over.
+    assert await store.acquire_or_renew_leader(key, "worker-B", ttl_seconds=60) is True
+    # And A can't yank it back from B.
+    assert await store.acquire_or_renew_leader(key, "worker-A", ttl_seconds=60) is False
+
+
+async def test_leader_lock_release_only_if_owner(store: Store) -> None:
+    """release_leader is a no-op when called by a non-owner."""
+    key = "test:leader"
+    await store.acquire_or_renew_leader(key, "worker-A", ttl_seconds=60)
+    # B tries to release — must NOT actually delete A's lock.
+    await store.release_leader(key, "worker-B")
+    # A still holds it.
+    assert await store.acquire_or_renew_leader(key, "worker-A", ttl_seconds=60) is True
+    assert await store.acquire_or_renew_leader(key, "worker-B", ttl_seconds=60) is False
+
+
+async def test_leader_lock_ttl_expiry_allows_failover(store: Store) -> None:
+    """If the holder dies (no renewal), TTL expires and a peer can take it."""
+    key = "test:leader"
+    # Use ttl=1; we'll force expiry by deleting the key (simulating
+    # what real redis would do when the second tick).
+    assert await store.acquire_or_renew_leader(key, "worker-A", ttl_seconds=1) is True
+    await store._redis.delete(key)  # type: ignore[attr-defined]
+    # B can now grab it.
+    assert await store.acquire_or_renew_leader(key, "worker-B", ttl_seconds=60) is True

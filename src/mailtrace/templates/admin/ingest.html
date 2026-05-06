@@ -1,0 +1,162 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - USPS push feed{% endblock %}
+{% block body %}
+<h1>Admin · USPS push feed (IV-MTR)</h1>
+<p><a href="/admin/">&larr; user list</a> &nbsp;·&nbsp; <a href="/admin/email">SMTP →</a></p>
+
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+{% if flash_password %}
+<div class="flash">
+    <strong>New Basic Auth password generated.</strong>
+    Copy it now — it will not be shown again. Paste this into the USPS IV-MTR
+    "Host Password" field on the Subscription's Delivery tab.
+    <br><code style="font-size:1.1em">{{ flash_password }}</code>
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>How this works</h2>
+    <p class="lede">USPS Informed Visibility — Mail Tracking & Reporting (IV-MTR)
+       schedules a Data Delivery subscription that POSTs JSON to a URL we own.
+       USPS' source IPs are not fixed/published, so this endpoint authenticates
+       via HTTP Basic Auth. TLS is terminated by your front-end proxy (Caddy /
+       Cloudflare / nginx).</p>
+    <p>Your endpoint URL (paste into the IV portal as <strong>Host Address</strong>
+       + <strong>Host Target Directory</strong>):</p>
+    <pre>https://&lt;your-public-host&gt;/usps_feed</pre>
+    <p>USPS sends file in the Subscription's configured frequency (e.g. every 1 hour).
+       <strong>Heads up:</strong> if a delivery returns 5xx, USPS retries on its next
+       cycle — duplicate scans are deduplicated server-side by
+       <code>(scan_date_time, event_code, machine_name, facility_zip, facility_locale)</code>.</p>
+</div>
+
+<div class="card">
+    <h2>Receiver configuration</h2>
+    <form method="POST" action="/admin/ingest">
+        <label>
+            <input type="checkbox" name="enabled" value="true" {% if cfg and cfg.enabled %}checked{% endif %}>
+            Enable receiver <small>(off → endpoint returns 503 to USPS so they retry once you re-enable)</small>
+        </label>
+
+        <label>Basic Auth username</label>
+        <input type="text" name="basic_auth_user" value="{{ cfg.basic_auth_user if cfg else '' }}"
+               placeholder="usps_iv" autocomplete="off">
+
+        <label>Basic Auth password
+            {% if cfg and cfg.basic_auth_pass %}<small>(stored)</small>{% endif %}
+        </label>
+        <input type="password" name="basic_auth_pass" autocomplete="new-password"
+               placeholder="{{ '•••••• (already saved; check leave-unchanged to keep)' if (cfg and cfg.basic_auth_pass) else 'paste a strong random password' }}">
+        {% if cfg and cfg.basic_auth_pass %}
+        <label><input type="checkbox" name="leave_password_unchanged" value="true" checked>
+            Keep existing password (uncheck to replace, or use rotate below)</label>
+        {% endif %}
+        <label><input type="checkbox" name="rotate_password" value="true">
+            <strong>Rotate</strong> — generate a new strong password and show it once
+            <small>(overrides the password fields above)</small>
+        </label>
+
+        <div class="row">
+            <div>
+                <label>Max body size (MB)</label>
+                <input type="number" name="max_body_mb" min="1" max="1024"
+                       value="{{ cfg.max_body_mb if cfg else 100 }}">
+            </div>
+            <div>
+                <label>Expect gzip body
+                    <small>(set if you picked "Zipped" in the IV portal)</small>
+                </label>
+                <input type="checkbox" name="expect_gzip" value="true"
+                       {% if cfg and cfg.expect_gzip %}checked{% endif %}>
+                Decompress gzip
+            </div>
+        </div>
+
+        <label>
+            <input type="checkbox" name="archive_payloads" value="true"
+                   {% if cfg and cfg.archive_payloads %}checked{% endif %}>
+            Archive raw payloads to disk <small>(strongly recommended for debugging / replay)</small>
+        </label>
+        <label>Archive directory <small>(leave blank to use the default <code>{{ default_archive_dir }}</code>)</small></label>
+        <input type="text" name="archive_dir" value="{{ cfg.archive_dir if cfg else '' }}"
+               placeholder="{{ default_archive_dir }}">
+
+        <p><button type="submit">Save</button></p>
+    </form>
+
+    <p>
+        <strong>Status:</strong>
+        {% if cfg and cfg.enabled %}<span class="pill">enabled</span>{% else %}<span class="pill inactive">disabled</span>{% endif %}
+        &nbsp;·&nbsp;
+        <strong>Last delivery:</strong>
+        {{ cfg.last_received_at.strftime('%Y-%m-%d %H:%M %Z') if (cfg and cfg.last_received_at) else 'never' }}
+    </p>
+</div>
+
+<div class="card">
+    <h2>Self-test</h2>
+    <p class="lede">POST a synthetic 1-event payload to your local <code>/usps_feed</code>
+       with the configured Basic Auth credentials. Verifies auth + parsing in
+       isolation; the IMb in the test event won't match a real piece, so it
+       lands as 1 orphan, 0 stored.</p>
+    <form method="POST" action="/admin/ingest/test">
+        <p><button class="secondary" type="submit">Run self-test</button></p>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Recent deliveries <small>(last 20)</small></h2>
+    {% if not recent_logs %}
+    <p class="lede">Nothing yet. Once USPS POSTs (or you run the self-test), entries will show up here.</p>
+    {% else %}
+    <table>
+        <thead><tr>
+            <th>Received</th><th>Status</th><th>Source IP</th><th>Feed</th>
+            <th>Records</th><th>Matched</th><th>Stored</th><th>Orphans</th>
+            <th>Bytes</th><th>Archive / error</th>
+        </tr></thead>
+        <tbody>
+        {% for entry in recent_logs %}
+        <tr>
+            <td>{{ entry.received_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td><span class="pill">{{ entry.status }}</span></td>
+            <td><code>{{ entry.source_ip or '—' }}</code></td>
+            <td>{{ entry.feed_id or '—' }}</td>
+            <td>{{ entry.record_count }}</td>
+            <td>{{ entry.matched }}</td>
+            <td>{{ entry.new_scans }}</td>
+            <td>{{ entry.orphaned }}</td>
+            <td>{{ entry.bytes_received }}</td>
+            <td>
+                {% if entry.error %}<small class="err">{{ entry.error }}</small>
+                {% elif entry.raw_path %}<small><code>{{ entry.raw_path }}</code></small>
+                {% else %}—{% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>USPS portal — what to fill in</h2>
+    <p class="lede">In the IV-MTR portal, create a Subscription → Delivery tab:</p>
+    <table>
+        <tr><th>Protocol Type</th><td><code>HTTPS JSON</code></td></tr>
+        <tr><th>Host Address</th><td>your public host (no scheme), e.g. <code>track.example.com</code></td></tr>
+        <tr><th>Port</th><td><code>443</code></td></tr>
+        <tr><th>Host Target Directory</th><td><code>/usps_feed</code></td></tr>
+        <tr><th>Host User Name</th><td>the Basic Auth username from above</td></tr>
+        <tr><th>Host Password</th><td>the Basic Auth password from above (use <em>Rotate</em> to generate)</td></tr>
+        <tr><th>File Format</th><td><code>JSON</code></td></tr>
+        <tr><th>File Transfer Format</th><td><code>Un-zipped</code> for MVP, or <code>Zipped</code> if you flip <em>Expect gzip</em> on</td></tr>
+        <tr><th>Frequency</th><td>e.g. <code>1 Hour</code> (depends on your IV agreement)</td></tr>
+    </table>
+    <p><strong>Field selection:</strong> on the "Define Filters & Fields" tab make sure
+       you include at least <code>imb</code>, <code>scanDateTime</code>, <code>scanEventCode</code>,
+       <code>handlingEventType</code>, and the facility fields (<code>scanFacilityName</code>,
+       <code>scanFacilityCity</code>, <code>scanFacilityState</code>, <code>scanFacilityZIP</code>).
+       Missing fields aren't fatal — the parser only requires <code>imb</code>.</p>
+</div>
+{% endblock %}

@@ -1,0 +1,27 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - first-run setup{% endblock %}
+{% block body %}
+<h1>Welcome to mailtrace</h1>
+<p class="lede">No users exist yet. Create the first administrator.</p>
+
+<div class="card">
+    {% if error %}<p class="err">{{ error }}</p>{% endif %}
+    <form method="POST" action="/setup">
+        <label>Admin email</label>
+        <input type="email" name="email" required autofocus autocomplete="email">
+
+        <label>Password <small>(at least 10 characters)</small></label>
+        <input type="password" name="password" required minlength="10" autocomplete="new-password">
+
+        <label>Confirm password</label>
+        <input type="password" name="confirm_password" required minlength="10" autocomplete="new-password">
+
+        <label>Mailer ID <small>(optional, can be set later on Account)</small></label>
+        <input type="text" name="mailer_id" pattern="\d*" inputmode="numeric">
+
+        <p><button type="submit">Create admin account</button></p>
+    </form>
+</div>
+
+<p><small>This page disappears as soon as a user exists. If you redeploy with a fresh database, you will see it again on the next visit.</small></p>
+{% endblock %}

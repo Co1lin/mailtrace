@@ -1,0 +1,107 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - new piece{% endblock %}
+{% block body %}
+<h1>New mail piece</h1>
+{% if error %}<p class="err">{{ error }}</p>{% endif %}
+
+<div class="card">
+<form method="POST" action="/pieces/new">
+    <label>Label <small>(optional)</small></label>
+    <input type="text" name="label" maxlength="80">
+
+    <h3>Sender</h3>
+    <label>Pick a saved sender</label>
+    <select name="sender_address_id">
+        <option value="">— inline below —</option>
+        {% for a in addresses if a.role in ('sender', 'both') %}
+        <option value="{{ a.id }}">{{ a.label }}</option>
+        {% endfor %}
+    </select>
+    <label>Or type the sender block <small>(used if no saved sender selected)</small></label>
+    <textarea name="sender_block_inline" rows="4"></textarea>
+
+    <h3>Recipient</h3>
+    <label>Pick a saved recipient</label>
+    <select name="recipient_address_id" id="recipient-pick">
+        <option value="">— inline below —</option>
+        {% for a in addresses if a.role in ('recipient', 'both') %}
+        <option value="{{ a.id }}">{{ a.label }}</option>
+        {% endfor %}
+    </select>
+    <p><small>If no saved recipient is picked, fill in the inline fields below.</small></p>
+
+    <label>Recipient name</label>
+    <input type="text" name="recipient_name" maxlength="120">
+    <label>Company <small>(optional)</small></label>
+    <input type="text" name="recipient_company" maxlength="120">
+    <label>Street</label>
+    <input type="text" name="recipient_street" maxlength="200">
+    <label>Address line 2 <small>(optional)</small></label>
+    <input type="text" name="recipient_address2" maxlength="200">
+    <div class="row">
+        <div><label>City</label><input type="text" name="recipient_city"></div>
+        <div><label>State</label><input type="text" name="recipient_state" maxlength="2"></div>
+        <div><label>ZIP (5/9/11 digits)</label><input type="text" name="recipient_zip"></div>
+    </div>
+    <p>
+        <button type="button" class="secondary" onclick="validateRecipient(this)">Validate against USPS</button>
+        <span id="validate-status" style="margin-left:0.5rem"></span>
+    </p>
+
+    <h3>IMb options</h3>
+    <label>
+        <input type="checkbox" name="include_zip_in_imb" value="true" checked>
+        Include recipient ZIP in the IMb routing field
+    </label>
+    <p><small>Default: include. Uncheck to test ZIP-less IMb tracking — the
+       IMb tracking ID is shorter, but the printed envelope still uses the
+       full address (including ZIP) for delivery.</small></p>
+
+    <label>
+        <input type="checkbox" name="keep_as_stock" value="true">
+        Keep as stock (don't start tracking yet)
+    </label>
+    <p><small>Default: this piece is being mailed now — start polling immediately.
+       Check this if you're pre-generating an IMb you'll print and use later;
+       you can mark it mailed from the detail page when you drop it in the box.</small></p>
+
+    <p><button type="submit">Create piece</button> <a href="/pieces/">Cancel</a></p>
+</form>
+</div>
+
+<script>
+async function validateRecipient(btn) {
+    const form = btn.closest('form');
+    const status = document.getElementById('validate-status');
+    const fields = ['recipient_company','recipient_address2','recipient_street','recipient_city','recipient_state','recipient_zip'];
+    const fd = new FormData();
+    fd.set('firmname', (form.recipient_company.value || '').trim());
+    fd.set('address2', (form.recipient_address2.value || '').trim());
+    fd.set('street_address', (form.recipient_street.value || '').trim());
+    fd.set('city', (form.recipient_city.value || '').trim());
+    fd.set('state', (form.recipient_state.value || '').trim());
+    fd.set('zip', (form.recipient_zip.value || '').trim());
+    btn.disabled = true; status.textContent = 'checking…'; status.className = '';
+    try {
+        const resp = await fetch('/addresses/validate', { method: 'POST', body: fd });
+        const data = await resp.json();
+        if (!resp.ok || data.error) {
+            status.textContent = 'failed: ' + (data.error || resp.statusText);
+            status.className = 'err'; return;
+        }
+        const a = data.address;
+        form.recipient_company.value = a.firmname || form.recipient_company.value;
+        form.recipient_address2.value = a.address2 || '';
+        form.recipient_street.value = a.street_address || form.recipient_street.value;
+        form.recipient_city.value = a.city || form.recipient_city.value;
+        form.recipient_state.value = a.state || form.recipient_state.value;
+        form.recipient_zip.value = (a.zip5 || '') + (a.zip4 || '') + (a.dp || '');
+        status.textContent = 'standardized.'; status.className = 'ok';
+    } catch (e) {
+        status.textContent = 'network error'; status.className = 'err';
+    } finally {
+        btn.disabled = false;
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,17 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - sign in{% endblock %}
+{% block body %}
+<h1>Sign in</h1>
+<div class="card">
+    {% if error %}<p class="err">{{ error }}</p>{% endif %}
+    <form method="POST" action="/auth/login">
+        <input type="hidden" name="next" value="{{ next }}">
+        <label>Email</label>
+        <input type="email" name="email" required autofocus autocomplete="email">
+        <label>Password</label>
+        <input type="password" name="password" required autocomplete="current-password">
+        <p><button type="submit">Sign in</button></p>
+    </form>
+</div>
+<p><small>Accounts are invite-only. Contact your admin if you need access.</small></p>
+{% endblock %}

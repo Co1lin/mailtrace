@@ -1,0 +1,75 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - pieces{% endblock %}
+{% block body %}
+<h1>Pieces</h1>
+<p>
+    <a href="/pieces/new">+ New piece</a>
+    &nbsp;·&nbsp;
+    <a href="/pieces/batch">+ Stock batch</a>
+    &nbsp;·&nbsp;
+    <a href="/pieces/import">+ CSV import</a>
+    &nbsp;·&nbsp;
+    <a href="/pieces/sheet/setup">Print sticker sheet</a>
+</p>
+
+{% macro tab(href, label, count, active) -%}
+{% if active -%}<strong>{{ label }} ({{ count }})</strong>{%- else -%}<a href="{{ href }}">{{ label }} ({{ count }})</a>{%- endif %}
+{%- endmacro %}
+
+<p>
+    {% if show_archived %}
+    {{ tab('/pieces/', 'Active', active_count, false) }}
+    &nbsp;·&nbsp;
+    {{ tab('/pieces/?archived=1', 'Archived', archived_count, true) }}
+    {% else %}
+    {{ tab('/pieces/', 'All active', active_count, status_filter == '') }}
+    &nbsp;·&nbsp;
+    {{ tab('/pieces/?status=generated', 'Stock', generated_count, status_filter == 'generated') }}
+    &nbsp;·&nbsp;
+    {{ tab('/pieces/?status=printed', 'Printed', printed_count, status_filter == 'printed') }}
+    &nbsp;·&nbsp;
+    {{ tab('/pieces/?status=in_flight', 'In flight', in_flight_count, status_filter == 'in_flight') }}
+    &nbsp;·&nbsp;
+    {{ tab('/pieces/?status=delivered', 'Delivered', delivered_count, status_filter == 'delivered') }}
+    &nbsp;·&nbsp;
+    {{ tab('/pieces/?archived=1', 'Archived', archived_count, false) }}
+    {% endif %}
+</p>
+
+{% if not pieces %}
+<p class="lede">No {{ 'archived' if show_archived else status_filter or 'active' }} pieces.</p>
+{% else %}
+<form method="POST" action="/pieces/bulk-action">
+<table>
+    <thead><tr>
+        <th><input type="checkbox" onclick="document.querySelectorAll('input[name=ids]').forEach(c => c.checked = this.checked)"></th>
+        <th>Created</th><th>Label</th><th>Recipient</th><th>Status</th><th>IMb</th><th>Last poll</th>
+    </tr></thead>
+    <tbody>
+    {% for p in pieces %}
+    <tr>
+        <td><input type="checkbox" name="ids" value="{{ p.id }}"></td>
+        <td><a href="/pieces/{{ p.id }}">{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</a></td>
+        <td>{{ p.label or '—' }}</td>
+        <td>{{ p.recipient_block.split('\n')[0] if p.recipient_block else '—' }}</td>
+        <td><span class="pill">{{ p.status }}</span></td>
+        <td><code>{{ p.human_readable_imb() }}</code></td>
+        <td>{{ p.last_polled_at.strftime('%Y-%m-%d %H:%M') if p.last_polled_at else '—' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+<p>
+    <label>With selected:</label>
+    {% if not show_archived %}
+    <button type="submit" name="action" value="mark_printed" class="secondary">Mark printed</button>
+    <button type="submit" name="action" value="mark_mailed" class="secondary">Mark mailed</button>
+    <button type="submit" name="action" value="archive" class="secondary">Archive</button>
+    {% else %}
+    <button type="submit" name="action" value="unarchive" class="secondary">Unarchive</button>
+    {% endif %}
+    <button type="submit" name="action" value="delete" class="danger" onclick="return confirm('Permanently delete the selected pieces?')">Delete</button>
+</p>
+</form>
+{% endif %}
+{% endblock %}

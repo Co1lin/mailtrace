@@ -1,0 +1,68 @@
+{% extends "_base.html" %}
+{% block title %}mailtrace - admin settings{% endblock %}
+{% block body %}
+<h1>Admin · platform settings</h1>
+<p>
+    <a href="/admin/">&larr; user list</a>
+    &nbsp;·&nbsp; <a href="/admin/email">SMTP →</a>
+    &nbsp;·&nbsp; <a href="/admin/ingest">Push feed →</a>
+</p>
+
+{% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
+<div class="card">
+    <h2>What lives here</h2>
+    <p class="lede">Platform-wide operational tuning that applies to every
+       tenant. <strong>USPS API credentials are NOT here</strong> — they
+       are per-user, configured by each user on their own
+       <a href="/auth/account">Account</a> page. As the platform admin
+       you only manage users (<a href="/admin/">/admin/</a>), SMTP
+       (<a href="/admin/email">/admin/email</a>), the IV-MTR push
+       receiver (<a href="/admin/ingest">/admin/ingest</a>), and the
+       background poller cadence below.</p>
+</div>
+
+<form method="POST" action="/admin/settings">
+<div class="card">
+    <h2>Background poller cadence</h2>
+    <p class="lede">The background loop wakes every <em>interval</em> seconds, polls
+       in-flight pieces (each using their owner's BCG credentials), runs auto-archive,
+       and dispatches email digests. Changes take effect on the next loop tick — no
+       restart needed.</p>
+
+    <label>
+        <input type="checkbox" name="poll_enabled" value="true" {% if cfg.poll_enabled %}checked{% endif %}>
+        Enable pull-polling platform-wide
+        <small>(off = push-feed-only mode for everyone; auto-archive and digests still run)</small>
+    </label>
+
+    <div class="row">
+        <div>
+            <label>Loop interval (seconds, 30–86400)</label>
+            <input type="number" name="poll_loop_interval_seconds" min="30" max="86400" value="{{ cfg.poll_loop_interval_seconds }}">
+        </div>
+        <div>
+            <label>Max pieces polled per cycle</label>
+            <input type="number" name="poll_max_per_cycle" min="1" max="1000" value="{{ cfg.poll_max_per_cycle }}">
+        </div>
+        <div>
+            <label>Auto-archive after N days <small>(0 = never)</small></label>
+            <input type="number" name="auto_archive_after_days" min="0" max="3650" value="{{ cfg.auto_archive_after_days }}">
+        </div>
+    </div>
+</div>
+
+<p><button type="submit">Save</button></p>
+</form>
+
+<div class="card">
+    <h2>Where else config lives</h2>
+    <ul>
+        <li><a href="/admin/">Users</a> — invite, force-reset, deactivate, delete.</li>
+        <li><a href="/admin/email">SMTP server</a> — for the email digest the poller / push-feed sends to opted-in users.</li>
+        <li><a href="/admin/ingest">USPS push feed</a> — Basic Auth + gzip + raw-payload archive for the IV-MTR push receiver. One platform-level Basic Auth credential; each user creates their own USPS-side subscription pointing at the same endpoint.</li>
+        <li><strong>Per-user</strong>: each user opens <a href="/auth/account">Account</a> to set their own Mailer ID, USPS API Client ID/Secret, and (optionally) BCG credentials.</li>
+        <li><strong>Bootstrap (env vars only)</strong>: <code>MAILTRACE_SESSION_SECRET</code>, <code>MAILTRACE_DATABASE_URL</code>, <code>MAILTRACE_REDIS_URL</code>, plus host/port and infrastructure paths.</li>
+    </ul>
+</div>
+{% endblock %}
