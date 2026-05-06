@@ -14,11 +14,33 @@
             <small>(annotate later — e.g. "shipped from Alaska Mar 12")</small>
         </label>
         <div style="display:flex; gap:0.4rem; align-items:center">
-            <input type="text" name="label" maxlength="80" value="{{ piece.label or '' }}"
+            <input type="text" name="label" id="piece-label-input"
+                   maxlength="80" value="{{ piece.label or '' }}"
                    placeholder="(blank — add a note about when/where you mailed it, etc.)"
                    style="flex:1">
+            <button type="button" class="secondary" id="piece-label-now-btn"
+                    title="Append current local timestamp (does not save)">+ Now</button>
             <button type="submit" class="secondary">Save label</button>
         </div>
+        <script>
+        // Append current browser-local YYYY-MM-DD HH:MM to the label input
+        // (not saved until Save is clicked). Truncates to the 80-char DB
+        // column. Use " · " as a separator so multiple appends stay legible.
+        (function () {
+            const input = document.getElementById("piece-label-input");
+            const btn = document.getElementById("piece-label-now-btn");
+            btn.addEventListener("click", function () {
+                const d = new Date();
+                const pad = function (n) { return String(n).padStart(2, "0"); };
+                const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                const sep = input.value.trim() ? " · " : "";
+                input.value = (input.value + sep + stamp).slice(0, 80);
+                input.focus();
+                // Move caret to end so the user can keep typing.
+                input.setSelectionRange(input.value.length, input.value.length);
+            });
+        })();
+        </script>
     </form>
     <p><strong>Status:</strong> <span class="pill">{{ piece.status }}</span>
        {% if piece.archived_at %} <span class="pill inactive">archived</span>{% endif %}</p>

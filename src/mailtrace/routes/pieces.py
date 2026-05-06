@@ -821,6 +821,10 @@ async def bulk_action(
     elif action == "mark_mailed":
         for p in pieces:
             _mark_mailed_in_place(p)
+    elif action == "set_label":
+        new_label = str(form.get("label", "") or "").strip()[:80]
+        for p in pieces:
+            p.label = new_label
     elif action == "delete":
         for p in pieces:
             await db.delete(p)

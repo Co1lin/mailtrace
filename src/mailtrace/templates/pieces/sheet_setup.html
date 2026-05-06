@@ -316,27 +316,9 @@ function selectRecentPieces(minutes) {
     });
 }
 
-// Shift+click range select: clicking a checkbox while holding Shift
-// applies the just-clicked checkbox's NEW state to every checkbox between
-// it and the previously-clicked one (inclusive). Works in DOM order, which
-// matches the visible row order. No anchor reset on regular clicks — the
-// most-recently-clicked box is always the new anchor.
-(function () {
-    const boxes = Array.from(document.querySelectorAll('input[name=ids]'));
-    let anchor = null;
-    boxes.forEach(function (cb, i) {
-        cb.addEventListener("click", function (e) {
-            if (e.shiftKey && anchor && anchor !== cb) {
-                const a = boxes.indexOf(anchor);
-                const b = i;
-                const [from, to] = a < b ? [a, b] : [b, a];
-                const newState = cb.checked;  // already toggled by the click
-                for (let j = from; j <= to; j++) boxes[j].checked = newState;
-            }
-            anchor = cb;
-        });
-    });
-})();
+// Shift-click range select on the pieces table is wired up globally
+// in _base.html (auto-binds to any group of checkboxes sharing a name
+// attribute with 2+ members) — no per-page setup needed here.
 
 // Inline PDF preview: POST the form via fetch, get the PDF blob, drop
 // it into the iframe via a blob URL. Keeps the user on this page —

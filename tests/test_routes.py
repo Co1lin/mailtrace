@@ -3165,6 +3165,128 @@ async def test_bulk_mark_mailed(
         assert all(p.status == "in_flight" for p in rows)
 
 
+async def test_bulk_set_label_overwrites_selected(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """Bulk action `set_label` overwrites the label on every selected
+    piece (including pieces that previously had a non-empty label).
+    Use case: select all pieces from one mailing batch, set them to
+    'rent check Apr' or similar in one click."""
+    from mailtrace.models import Address
+
+    async with db_sessionmaker() as db:
+        a = Address(user_id=regular_user.id, label="rcpt", role="recipient", zip="94105")
+        db.add(a)
+        await db.commit()
+        await db.refresh(a)
+        a_id = a.id
+    await client.post(
+        "/pieces/batch",
+        data={"row-0-recipient_id": str(a_id), "row-0-count": "3"},
+        follow_redirects=False,
+    )
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        ids = [str(p.id) for p in rows]
+
+    resp = await client.post(
+        "/pieces/bulk-action",
+        data={"ids": ids, "action": "set_label", "label": "rent check Apr"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        assert [p.label for p in rows] == ["rent check Apr"] * 3
+
+    # Empty label clears.
+    await client.post(
+        "/pieces/bulk-action",
+        data={"ids": ids, "action": "set_label", "label": ""},
+        follow_redirects=False,
+    )
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        assert all(p.label == "" for p in rows)
+
+    # 200-char input truncates to 80.
+    await client.post(
+        "/pieces/bulk-action",
+        data={"ids": ids, "action": "set_label", "label": "x" * 200},
+        follow_redirects=False,
+    )
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        assert all(len(p.label) == 80 for p in rows)
+
+
+async def test_pieces_list_renders_bulk_set_label_form(
+    client: AsyncClient,
+) -> None:
+    """The pieces list active view should expose the bulk set-label
+    input + submit button. The archived view should NOT (you can't
+    re-label something you've archived without unarchiving first)."""
+    # Need at least one active piece for the form to render at all.
+    await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    page = await client.get("/pieces/")
+    assert page.status_code == 200
+    assert 'name="action" value="set_label"' in page.text
+    assert 'name="label"' in page.text and 'maxlength="80"' in page.text
+
+
+async def test_piece_detail_label_now_button_is_present(
+    client: AsyncClient,
+) -> None:
+    """The per-piece label edit form should include a '+ Now' button
+    that JS-appends the current local timestamp to the input value."""
+    resp = await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    pid = int(resp.headers["location"].rsplit("/", 1)[-1])
+    page = await client.get(f"/pieces/{pid}")
+    assert page.status_code == 200
+    assert 'id="piece-label-input"' in page.text
+    assert 'id="piece-label-now-btn"' in page.text
+    # The JS must reference the input + format a timestamp.
+    assert "piece-label-input" in page.text
+    assert "getFullYear" in page.text or "toISOString" in page.text
+
+
+async def test_base_template_includes_global_shift_click_handler(
+    client: AsyncClient,
+) -> None:
+    """The shift+click range-select handler lives in _base.html and
+    auto-binds to any group of checkboxes sharing a `name`. Verify the
+    handler ships on every authenticated page (use /pieces/ as the
+    representative sample) by checking for its key tokens."""
+    page = await client.get("/pieces/")
+    assert page.status_code == 200
+    # JS handler tokens.
+    assert "shiftKey" in page.text
+    # Should NOT depend on a per-page setup script anymore.
+    assert "input[type=checkbox][name]" in page.text
+
+
 async def test_status_filter_tabs(
     client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
 ) -> None:

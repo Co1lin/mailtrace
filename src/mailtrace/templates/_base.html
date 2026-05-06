@@ -121,6 +121,35 @@ document.querySelectorAll("time[data-utc]").forEach(function (el) {
     el.textContent = _localFormat(d, el.getAttribute("data-fmt") || "datetime");
     el.setAttribute("title", d.toString());
 });
+
+// Shift+click range select for any group of checkboxes that share a
+// `name` attribute and have 2+ members. Standard UI idiom — clicking
+// one checkbox, then shift-clicking another, propagates the second
+// click's NEW state to every checkbox between them in DOM order.
+// Auto-binds page-wide so list pages get it for free; pages with a
+// lone toggle (mark_as_printed, etc.) are unaffected because their
+// group has length 1.
+(function () {
+    const groups = {};
+    document.querySelectorAll('input[type=checkbox][name]').forEach(function (cb) {
+        (groups[cb.name] = groups[cb.name] || []).push(cb);
+    });
+    Object.values(groups).forEach(function (cbs) {
+        if (cbs.length < 2) return;
+        let anchor = null;
+        cbs.forEach(function (cb, i) {
+            cb.addEventListener("click", function (e) {
+                if (e.shiftKey && anchor && anchor !== cb) {
+                    const a = cbs.indexOf(anchor);
+                    const [from, to] = a < i ? [a, i] : [i, a];
+                    const newState = cb.checked;  // already toggled by the click
+                    for (let j = from; j <= to; j++) cbs[j].checked = newState;
+                }
+                anchor = cb;
+            });
+        });
+    });
+})();
 {% if user is defined and user and not user.timezone %}
 // Auto-capture browser timezone the first time a logged-in user with no
 // stored timezone loads any page. Used only for out-of-band rendering

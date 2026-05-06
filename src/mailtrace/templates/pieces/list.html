@@ -67,6 +67,19 @@
     {% endif %}
     <button type="submit" name="action" value="delete" class="danger" onclick="return confirm('Permanently delete the selected pieces?')">Delete</button>
 </p>
+{% if not show_archived %}
+<p style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap">
+    <label style="margin:0">Set label on selected:</label>
+    <input type="text" name="label" maxlength="80"
+           placeholder="e.g. shipped from Alaska Mar 12 — replaces existing label"
+           style="flex:1; min-width:18rem">
+    <button type="submit" name="action" value="set_label" class="secondary">Apply label</button>
+</p>
+{% endif %}
+<p><small><strong>Tip:</strong> shift-click two checkboxes to select
+   (or deselect) the entire range between them. Bulk <em>Set label</em>
+   overwrites whatever label was on each selected piece — empty input
+   clears them all.</small></p>
 </form>
 {% endif %}
 {% endblock %}
