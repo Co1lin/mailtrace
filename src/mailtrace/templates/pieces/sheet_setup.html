@@ -2,73 +2,200 @@
 {% block title %}mailtrace - print sheet{% endblock %}
 {% block body %}
 <h1>Print sticker sheet</h1>
-<p class="lede">Pick the sheet size you'll feed into the printer, choose where
-   on it to start, then check off the pieces. Pieces fill
-   <strong>left → right within each row, then top → bottom</strong> by row.
-   Skipping already-used cells is the point — partial sheets stay usable.
-   Subsequent pages always start at row 1, column 1.</p>
-<p><small>Generating the PDF auto-marks any <strong>generated</strong> pieces
-   as <strong>printed</strong>. HTML preview doesn't change state.</small></p>
+<p class="lede">Pick the sheet size, click the cell where you want printing
+   to start (cells before it are treated as already-used and skipped),
+   then check off the pieces. Pieces fill <strong>left → right within
+   each row, then top → bottom</strong>. New pages always start at
+   row 1, column 1.</p>
+<p><small><strong>Generate PDF</strong> downloads the file. <strong>Preview</strong>
+   shows the PDF inline below. Neither changes piece status by default —
+   tick "<em>Mark as printed</em>" below if you want generated pieces to
+   transition to <em>printed</em> when you submit.</small></p>
+
+<style>
+.layout-radios, .align-radios {
+    display: flex; flex-direction: column; gap: 0.4rem;
+    margin: 0.4rem 0 1rem;
+}
+.layout-radios label.layout-card,
+.align-radios label.align-card {
+    display: flex; align-items: center; gap: 0.6rem;
+    border: 1px solid #ddd; border-radius: 6px; padding: 0.6rem 0.8rem;
+    cursor: pointer; font-weight: normal;
+    margin: 0;
+}
+.layout-radios label.layout-card:has(input:checked),
+.align-radios label.align-card:has(input:checked) {
+    border-color: #1f6feb; background: #eaf1ff;
+}
+.layout-radios label.layout-card .lay-meta { color: #666; font-size: 0.85rem; }
+
+/* Visual cell picker: a scaled-down (~220px wide) copy of the physical
+   sheet. One absolutely-positioned div per cell; positions are computed
+   in JS from the layout dict so 5163 / 5162 / 5161 each show their real
+   row count + label aspect ratio. Cells before the chosen start are
+   diagonal-striped to look "already used"; the chosen start is solid blue. */
+.picker-wrap { display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin: 0.5rem 0 1rem; }
+.sheet-picker {
+    width: 220px;
+    aspect-ratio: 8.5 / 11;
+    background: white;
+    border: 1px solid #999;
+    position: relative;
+    box-sizing: border-box;
+    flex-shrink: 0;
+}
+.sheet-cell {
+    position: absolute;
+    border: 1px dashed #b0b0b0;
+    background: #fafafa;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; color: #555;
+    box-sizing: border-box;
+    transition: background 0.08s;
+    user-select: none;
+}
+.sheet-cell:hover { background: #d6e8ff; color: #000; border-color: #1f6feb; }
+.sheet-cell.selected {
+    background: #1f6feb; color: white; border-style: solid; border-color: #1f6feb;
+    font-weight: bold;
+}
+.sheet-cell.skipped {
+    background: repeating-linear-gradient(
+        45deg, #f0f0f0, #f0f0f0 4px, #d8d8d8 4px, #d8d8d8 8px);
+    color: #999;
+}
+.picker-state { font-size: 0.9rem; color: #444; }
+.picker-state .picker-val { font-weight: 600; color: #1f6feb; }
+
+/* Inline PDF preview iframe: hidden until Preview is clicked. */
+#preview-pane { display: none; margin-top: 1rem; }
+#preview-pane iframe {
+    width: 100%; height: 80vh; border: 1px solid #999; border-radius: 4px;
+    background: #f0f0f0;
+}
+#preview-pane .preview-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.4rem; }
+#preview-status { font-size: 0.9rem; color: #666; }
+#preview-status.err { color: #b00; }
+</style>
 
 <div class="card">
-<form method="POST" action="/pieces/sheet">
-    <h2>Layout</h2>
-    <label>Sheet size <small>(pick the Avery model printed on your sheet — sister model numbers map to the same template)</small></label>
-    <select name="layout" id="layout-select">
-        {% for key, lay in layouts.items() %}
-        <option value="{{ key }}"
-                data-rows="{{ lay.rows }}"
-                data-cols="{{ lay.cols }}"
-                {% if key == "5163" %}selected{% endif %}>
-            Avery {{ lay.model }} —
-            {% if lay.label_height_in == 4.0 / 3.0 %}4″ × 1⅓″
-            {% else %}{{ lay.label_width_in|int if lay.label_width_in == lay.label_width_in|int else lay.label_width_in }}″ × {{ lay.label_height_in|int if lay.label_height_in == lay.label_height_in|int else lay.label_height_in }}″{% endif %}
-            ({{ lay.labels_per_sheet }}/sheet, {{ lay.rows }}×{{ lay.cols }})
-            · also {{ lay.aliases|join(", ") }}
-        </option>
-        {% endfor %}
-    </select>
+<form method="POST" action="/pieces/sheet" id="sheet-form">
 
-    <div class="row">
-        <div>
-            <label>Start row <small id="row-hint">(1–5)</small></label>
-            <input type="number" name="start_row" id="start-row" min="1" max="5" value="1">
-        </div>
-        <div>
-            <label>Start column <small id="col-hint">(1–2)</small></label>
-            <input type="number" name="start_col" id="start-col" min="1" max="2" value="1">
-        </div>
-        <div>
-            <label>Output</label>
-            <select name="doc_type">
-                <option value="pdf" selected>PDF</option>
-                <option value="html">HTML (preview)</option>
-            </select>
+    <h2>Sheet size</h2>
+    <div class="layout-radios">
+        {% for key, lay in layouts.items() %}
+        <label class="layout-card">
+            <input type="radio" name="layout" value="{{ key }}"
+                   {% if key == "5163" %}checked{% endif %}>
+            <span>
+                <strong>Avery {{ lay.model }}</strong>
+                — {% if lay.label_height_in == 4.0 / 3.0 %}4″ × 1⅓″
+                {% else %}{{ lay.label_width_in|int if lay.label_width_in == lay.label_width_in|int else lay.label_width_in }}″ × {{ lay.label_height_in|int if lay.label_height_in == lay.label_height_in|int else lay.label_height_in }}″{% endif %}
+                ({{ lay.labels_per_sheet }}/sheet, {{ lay.rows }} rows × {{ lay.cols }} cols)
+                <br><small class="lay-meta">also: {{ lay.aliases|join(", ") }}</small>
+            </span>
+        </label>
+        {% endfor %}
+    </div>
+
+    <h2>Content alignment</h2>
+    <div class="align-radios">
+        <label class="align-card">
+            <input type="radio" name="alignment" value="left" checked>
+            <span><strong>Left</strong> — IMb and address aligned to the left edge of each label.</span>
+        </label>
+        <label class="align-card">
+            <input type="radio" name="alignment" value="center">
+            <span><strong>Center</strong> — IMb and address horizontally centered. Visually balances the sheet when text is shorter than 4″.</span>
+        </label>
+    </div>
+
+    <h2>Starting cell</h2>
+    <p><small>Click the cell where the first piece should land. Diagonal-striped
+       cells are treated as already-used and skipped on the first page only;
+       subsequent pages always start at row 1, col 1.</small></p>
+    <div class="picker-wrap">
+        <div id="sheet-picker" class="sheet-picker"
+             aria-label="sheet layout — click a cell to set the starting position"></div>
+        <div class="picker-state">
+            <p>Starting at <span class="picker-val">row <span id="picker-row-display">1</span>, column <span id="picker-col-display">1</span></span><br>
+            <small><span id="picker-skip-display">no skipped cells</span></small></p>
         </div>
     </div>
+    <input type="hidden" name="start_row" id="start-row" value="1">
+    <input type="hidden" name="start_col" id="start-col" value="1">
+
+    <script id="layouts-data" type="application/json">{{ layouts|tojson }}</script>
     <script>
-        // Keep the start-row/col inputs' max attribute (and value, if it
-        // overflows) in sync with whichever sheet size is selected.
-        (function () {
-            const sel = document.getElementById("layout-select");
-            const rowInput = document.getElementById("start-row");
-            const colInput = document.getElementById("start-col");
-            const rowHint = document.getElementById("row-hint");
-            const colHint = document.getElementById("col-hint");
-            function sync() {
-                const opt = sel.options[sel.selectedIndex];
-                const rows = parseInt(opt.dataset.rows, 10);
-                const cols = parseInt(opt.dataset.cols, 10);
-                rowInput.max = rows;
-                colInput.max = cols;
-                rowHint.textContent = `(1–${rows})`;
-                colHint.textContent = `(1–${cols})`;
-                if (parseInt(rowInput.value, 10) > rows) rowInput.value = rows;
-                if (parseInt(colInput.value, 10) > cols) colInput.value = cols;
+    (function () {
+        const LAYOUTS = JSON.parse(document.getElementById("layouts-data").textContent);
+        const PAGE_W = 8.5, PAGE_H = 11;  // US Letter, all current Avery sheets
+        const picker = document.getElementById("sheet-picker");
+        const startRowInput = document.getElementById("start-row");
+        const startColInput = document.getElementById("start-col");
+        const rowDisp = document.getElementById("picker-row-display");
+        const colDisp = document.getElementById("picker-col-display");
+        const skipDisp = document.getElementById("picker-skip-display");
+
+        function currentLayout() {
+            const checked = document.querySelector('input[name=layout]:checked');
+            return checked ? LAYOUTS[checked.value] : null;
+        }
+
+        function selectStart(r, c) {
+            const layout = currentLayout();
+            if (!layout) return;
+            startRowInput.value = r;
+            startColInput.value = c;
+            rowDisp.textContent = r;
+            colDisp.textContent = c;
+            const startIdx = (r - 1) * layout.cols + (c - 1);
+            skipDisp.textContent = startIdx === 0
+                ? "no skipped cells"
+                : `${startIdx} skipped cell${startIdx > 1 ? "s" : ""} (already used on this physical sheet)`;
+            picker.querySelectorAll(".sheet-cell").forEach(function (cell) {
+                const cr = parseInt(cell.dataset.row, 10);
+                const cc = parseInt(cell.dataset.col, 10);
+                const cellIdx = (cr - 1) * layout.cols + (cc - 1);
+                cell.classList.toggle("selected", cr === r && cc === c);
+                cell.classList.toggle("skipped", cellIdx < startIdx);
+            });
+        }
+
+        function renderPicker() {
+            const layout = currentLayout();
+            if (!layout) return;
+            picker.innerHTML = "";
+            for (let r = 1; r <= layout.rows; r++) {
+                for (let c = 1; c <= layout.cols; c++) {
+                    const top = layout.top_margin_in + (r - 1) * layout.row_pitch_in;
+                    const left = layout.left_margin_in + (c - 1) * layout.col_pitch_in;
+                    const cell = document.createElement("div");
+                    cell.className = "sheet-cell";
+                    cell.dataset.row = r;
+                    cell.dataset.col = c;
+                    cell.style.top = (top / PAGE_H * 100) + "%";
+                    cell.style.left = (left / PAGE_W * 100) + "%";
+                    cell.style.width = (layout.label_width_in / PAGE_W * 100) + "%";
+                    cell.style.height = (layout.label_height_in / PAGE_H * 100) + "%";
+                    cell.textContent = `${r}·${c}`;
+                    cell.addEventListener("click", function () { selectStart(r, c); });
+                    picker.appendChild(cell);
+                }
             }
-            sel.addEventListener("change", sync);
-            sync();
-        })();
+            // Reset start to (1,1) on layout change so a stale row/col from a
+            // bigger layout (e.g. 5161 row 8) doesn't carry over to a smaller
+            // one (5163 only has 5 rows) and silently 400 the form.
+            selectStart(1, 1);
+        }
+
+        document.querySelectorAll('input[name=layout]').forEach(function (r) {
+            r.addEventListener("change", renderPicker);
+        });
+        renderPicker();
+    })();
     </script>
 
     <h2>Pieces</h2>
@@ -76,13 +203,26 @@
     <p class="lede">No active pieces. <a href="/pieces/new">Create one first.</a></p>
     {% else %}
     <p>
+        <button type="submit" name="disposition" value="attachment">Generate PDF</button>
+        <button type="button" id="preview-btn" class="secondary">Preview</button>
+        &nbsp;·&nbsp;
         <button type="button" class="secondary" onclick="selectAllPieces(true)">Select all</button>
         <button type="button" class="secondary" onclick="selectRecentPieces(10)">Select last 10 min</button>
         <button type="button" class="secondary" onclick="selectAllPieces(false)">Clear</button>
-        <small>Pieces are sorted newest-first; the recent-selector picks
-           anything whose <em>Created</em> is within the last 10 minutes
-           (your browser's clock).</small>
     </p>
+    <p>
+        <label style="font-weight:normal">
+            <input type="checkbox" name="mark_as_printed" value="true">
+            Mark these pieces as <strong>printed</strong> after this submit
+        </label>
+        <br><small>Off by default. Tick this when you've actually fed the
+           sheet through your printer — flips any selected pieces from
+           <em>generated</em> to <em>printed</em>. Pieces already past
+           <em>generated</em> are untouched.</small>
+    </p>
+    <p><small>Pieces are sorted newest-first; the recent-selector picks
+       anything whose <em>Created</em> is within the last 10 minutes
+       (your browser's clock).</small></p>
     <table>
         <thead><tr>
             <th></th><th>Created</th><th>Label</th><th>Recipient</th><th>Status</th><th>IMb</th>
@@ -101,21 +241,85 @@
         {% endfor %}
         </tbody>
     </table>
-    <script>
-        function selectAllPieces(checked) {
-            document.querySelectorAll('input[name=ids]').forEach(function (c) { c.checked = checked; });
-        }
-        function selectRecentPieces(minutes) {
-            const cutoffMs = Date.now() - minutes * 60 * 1000;
-            document.querySelectorAll('input[name=ids]').forEach(function (c) {
-                const iso = c.dataset.createdAt;
-                const t = iso ? new Date(iso).getTime() : NaN;
-                c.checked = !isNaN(t) && t >= cutoffMs;
-            });
-        }
-    </script>
-    <p><button type="submit">Generate sheet</button></p>
     {% endif %}
 </form>
+
+{% if pieces %}
+<div id="preview-pane">
+    <div class="preview-header">
+        <strong>Preview</strong>
+        <span id="preview-status"></span>
+    </div>
+    <iframe id="preview-iframe" title="sticker sheet preview"></iframe>
 </div>
+{% endif %}
+</div>
+
+{% if pieces %}
+<script>
+function selectAllPieces(checked) {
+    document.querySelectorAll('input[name=ids]').forEach(function (c) { c.checked = checked; });
+}
+function selectRecentPieces(minutes) {
+    const cutoffMs = Date.now() - minutes * 60 * 1000;
+    document.querySelectorAll('input[name=ids]').forEach(function (c) {
+        const iso = c.dataset.createdAt;
+        const t = iso ? new Date(iso).getTime() : NaN;
+        c.checked = !isNaN(t) && t >= cutoffMs;
+    });
+}
+
+// Inline PDF preview: POST the form via fetch, get the PDF blob, drop
+// it into the iframe via a blob URL. Keeps the user on this page —
+// no download, no state change (server handles disposition=inline).
+(function () {
+    const btn = document.getElementById("preview-btn");
+    const pane = document.getElementById("preview-pane");
+    const iframe = document.getElementById("preview-iframe");
+    const status = document.getElementById("preview-status");
+    const form = document.getElementById("sheet-form");
+    let lastObjectUrl = null;
+
+    btn.addEventListener("click", async function () {
+        // Validate at least one piece is checked.
+        const anyChecked = !!document.querySelector('input[name=ids]:checked');
+        if (!anyChecked) {
+            pane.style.display = "block";
+            status.textContent = "Select at least one piece first.";
+            status.className = "err";
+            return;
+        }
+        status.textContent = "Rendering…";
+        status.className = "";
+        pane.style.display = "block";
+        const fd = new FormData(form);
+        fd.set("disposition", "inline");
+        try {
+            const resp = await fetch(form.action, {
+                method: "POST",
+                body: fd,
+                credentials: "same-origin",
+            });
+            if (!resp.ok) {
+                const text = await resp.text();
+                status.textContent = `Render failed (${resp.status}): ${text.slice(0, 200)}`;
+                status.className = "err";
+                return;
+            }
+            const blob = await resp.blob();
+            if (lastObjectUrl) URL.revokeObjectURL(lastObjectUrl);
+            lastObjectUrl = URL.createObjectURL(blob);
+            iframe.src = lastObjectUrl;
+            const pages = resp.headers.get("Content-Disposition") || "";
+            status.textContent = `${(blob.size / 1024).toFixed(1)} KB`;
+            status.className = "";
+            pane.scrollIntoView({behavior: "smooth", block: "start"});
+        } catch (err) {
+            status.textContent = `Network error: ${err.message}`;
+            status.className = "err";
+        }
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

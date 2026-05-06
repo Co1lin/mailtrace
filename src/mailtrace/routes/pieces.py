@@ -819,16 +819,29 @@ async def bulk_action(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{piece_id}/download/envelope.{ext}")
+@router.get("/{piece_id}/download/envelope.pdf")
 async def download_envelope(
-    request: Request,
     piece_id: int,
-    ext: str,
     db: SessionDep,
     user: CurrentUserDep,
+    alignment: str = "left",
+    inline: int = 0,
 ) -> Response:
+    """Render a #10 envelope PDF for one piece.
+
+    `alignment`: "left" (default) or "center" — recipient block alignment.
+    `inline=1`: returns Content-Disposition: inline (for embedding in
+    a browser PDF viewer); otherwise triggers a download.
+    """
     piece = await _load_owned(db, user.id, piece_id)
-    return _render_piece_doc(request, piece, "envelope", ext)
+    body = pdf.render_envelope(piece, alignment=alignment)
+    filename = f"envelope_{piece.serial:06d}_{piece.recipient_zip_raw or 'na'}.pdf"
+    disp = "inline" if inline else "attachment"
+    return Response(
+        content=body,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disp}; filename="{filename}"'},
+    )
 
 
 @router.get("/sheet/setup", response_class=HTMLResponse)
@@ -858,6 +871,21 @@ async def sheet_render(
     db: SessionDep,
     user: CurrentUserDep,
 ) -> Response:
+    """Render a sticker sheet PDF.
+
+    Form fields:
+      ids[]:        which MailPiece IDs to include (in print order)
+      layout:       Avery model number (5163/5162/5161 or any sister number)
+      start_row, start_col: where on the first sheet printing should start
+      alignment:    "left" (default) or "center" — content alignment per label
+      disposition:  "attachment" (default; downloads the PDF) or "inline"
+                    (embeds in a browser PDF viewer)
+      mark_as_printed: opt-in toggle. When set ("true"/"on"/"1"), any
+                    generated-state pieces transition to printed AFTER the
+                    PDF renders. Default OFF — clicking the button is for
+                    rendering, not for state mutation. Pair this with the
+                    "I actually printed it" checkbox in the UI.
+    """
     form = await request.form()
     raw_ids = form.getlist("ids") if hasattr(form, "getlist") else []
     try:
@@ -872,9 +900,13 @@ async def sheet_render(
         start_col = int(str(form.get("start_col", "1")))
     except ValueError as err:
         raise HTTPException(status_code=400, detail="row/col must be integers") from err
-    doc_type = str(form.get("doc_type", "pdf"))
-    if doc_type not in ("pdf", "html"):
-        raise HTTPException(status_code=400, detail="doc_type must be pdf or html")
+    alignment = str(form.get("alignment", "left"))
+    if alignment not in ("left", "center"):
+        raise HTTPException(status_code=400, detail="alignment must be left or center")
+    disposition = str(form.get("disposition", "attachment"))
+    if disposition not in ("attachment", "inline"):
+        raise HTTPException(status_code=400, detail="disposition must be attachment or inline")
+    mark_as_printed = str(form.get("mark_as_printed", "")).lower() in ("on", "true", "1")
 
     layout = resolve_layout(str(form.get("layout", "5163")))
     if not (1 <= start_row <= layout["rows"] and 1 <= start_col <= layout["cols"]):
@@ -895,26 +927,31 @@ async def sheet_render(
     if not ordered:
         raise HTTPException(status_code=404, detail="none of the selected pieces are yours")
 
-    pages = _allocate_sheet(ordered, layout=layout, start_row=start_row, start_col=start_col)
-    rendered = request.app.state.templates.get_template("avery_sheet.html").render(
-        pages=pages, layout=layout
+    body = pdf.render_label_sheet(
+        layout=layout,
+        pieces=ordered,
+        start_row=start_row,
+        start_col=start_col,
+        alignment=alignment,
     )
-    if doc_type == "html":
-        return HTMLResponse(rendered)
-    body = pdf.render(rendered, options=pdf.LABEL_OPTIONS)
-    # PDF rendered successfully → mark stock pieces as printed. Skip
-    # already-printed/mailed/delivered pieces (they keep their state).
-    now = utcnow()
-    for p in ordered:
-        if p.status == STATUS_GENERATED and p.archived_at is None:
-            p.status = STATUS_PRINTED
-            p.printed_at = p.printed_at or now
-    await db.commit()
+
+    # State mutation is opt-in — clicking Generate doesn't presume the user
+    # actually fed the sheet through a printer. They tick the
+    # "Mark as printed" checkbox to confirm. Inline preview can also opt
+    # in (rare but legal: render → eyeball → tick → re-submit if needed).
+    if mark_as_printed:
+        now = utcnow()
+        for p in ordered:
+            if p.status == STATUS_GENERATED and p.archived_at is None:
+                p.status = STATUS_PRINTED
+                p.printed_at = p.printed_at or now
+        await db.commit()
+
     filename = f"sheet_{len(ordered)}_pieces.pdf"
     return Response(
         content=body,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
     )
 
 
@@ -1040,60 +1077,32 @@ def _allocate_sheet(
     return pages
 
 
-@router.get("/{piece_id}/download/avery.{ext}")
+@router.get("/{piece_id}/download/avery.pdf")
 async def download_avery(
-    request: Request,
     piece_id: int,
-    ext: str,
     db: SessionDep,
     user: CurrentUserDep,
     row: int = 1,
     col: int = 1,
     layout: str = "5163",
+    alignment: str = "left",
+    inline: int = 0,
 ) -> Response:
+    """Render a single-piece Avery sheet (one piece in one cell of an
+    otherwise-empty sheet). Useful for finishing off a partial sheet."""
     piece = await _load_owned(db, user.id, piece_id)
     layout_dict = resolve_layout(layout)
     if not (1 <= row <= layout_dict["rows"] and 1 <= col <= layout_dict["cols"]):
         raise HTTPException(status_code=400, detail="row/col out of range for this layout")
-    return _render_piece_doc(request, piece, "avery", ext, row=row, col=col, layout=layout_dict)
-
-
-def _render_piece_doc(
-    request: Request,
-    piece: MailPiece,
-    format_type: str,
-    ext: str,
-    *,
-    row: int = 1,
-    col: int = 1,
-    layout: dict[str, Any] | None = None,
-) -> Response:
-    if format_type == "envelope":
-        template_name = "envelope.html"
-        pdf_options = pdf.ENVELOPE_OPTIONS
-    elif format_type == "avery":
-        template_name = "avery.html"
-        pdf_options = pdf.LABEL_OPTIONS
-    else:  # pragma: no cover - URL constraints prevent this
-        raise HTTPException(status_code=400, detail="unknown format")
-
-    rendered = request.app.state.templates.get_template(template_name).render(
-        sender_address=piece.sender_block,
-        recipient_address=piece.recipient_block,
-        human_readable_bar=piece.human_readable_imb(),
-        barcode=piece.imb_letters,
-        row=row,
-        col=col,
-        layout=layout or AVERY_LAYOUTS["5163"],
+    if alignment not in ("left", "center"):
+        raise HTTPException(status_code=400, detail="alignment must be left or center")
+    body = pdf.render_single_label(
+        layout=layout_dict, piece=piece, row=row, col=col, alignment=alignment
     )
-    if ext == "html":
-        return HTMLResponse(rendered)
-    if ext == "pdf":
-        body = pdf.render(rendered, options=pdf_options)
-        filename = f"{format_type}_{piece.serial:06d}_{piece.recipient_zip_raw or 'na'}.pdf"
-        return Response(
-            content=body,
-            media_type="application/pdf",
-            headers={"Content-Disposition": f"attachment; filename={filename}"},
-        )
-    raise HTTPException(status_code=400, detail="unknown extension")
+    filename = f"avery_{piece.serial:06d}_{piece.recipient_zip_raw or 'na'}.pdf"
+    disp = "inline" if inline else "attachment"
+    return Response(
+        content=body,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disp}; filename="{filename}"'},
+    )

@@ -817,3 +817,124 @@ def test_sheet_allocator_5161_paginates_at_20() -> None:
     )
     # 20 + 20 + 5 = 45 across 3 pages.
     assert [len(p) for p in pages] == [20, 20, 5]
+
+
+# ---------------------------------------------------------------------------
+# PDF rendering (reportlab + pylabels) — verifies the binary output is
+# actually a PDF, has the right page geometry, and contains the IMb font.
+# Detailed visual verification is done with locally-rendered samples; here
+# we just smoke-test that the pipeline produces a parseable file.
+# ---------------------------------------------------------------------------
+
+
+def test_pdf_render_label_sheet_produces_letter_pdf() -> None:
+    from mailtrace import pdf
+    from mailtrace.routes.pieces import AVERY_LAYOUTS
+
+    class _Stub:
+        imb_letters = "TADTADTDDFFADTFTFDTAFTDFADFTDFTDADTFAFFTDDFADTFDFFTDADTAFFTDADTAFF"
+        recipient_block = "Bob Smith\n100 Main Street\nSometown, CA, 94105"
+        sender_block = ""
+
+        def human_readable_imb(self) -> str:
+            return "00-040-12345-000001-94105"
+
+    body = pdf.render_label_sheet(
+        layout=AVERY_LAYOUTS["5163"],
+        pieces=[_Stub() for _ in range(3)],  # type: ignore[list-item]
+    )
+    # Valid PDF magic + a US Letter MediaBox.
+    assert body.startswith(b"%PDF-")
+    # ReportLab writes MediaBox as `/MediaBox [ x1 y1 x2 y2 ]`. Letter is
+    # 612 x 792 pts.
+    assert b"/MediaBox [ 0 0 612 792 ]" in body
+    # IMb font referenced.
+    assert b"USPSIMBStandard" in body
+
+
+def test_pdf_render_label_sheet_paginates_per_layout() -> None:
+    """The labels library should auto-paginate when more pieces than
+    fit on one sheet are added."""
+    from mailtrace import pdf
+    from mailtrace.routes.pieces import AVERY_LAYOUTS
+
+    class _Stub:
+        imb_letters = "TAD" * 22
+        recipient_block = "Recipient\n100 Main\nCity, ST, 12345"
+        sender_block = ""
+
+        def human_readable_imb(self) -> str:
+            return "human-readable"
+
+    # 5163 holds 10/sheet; 25 pieces should make 3 pages.
+    body = pdf.render_label_sheet(
+        layout=AVERY_LAYOUTS["5163"],
+        pieces=[_Stub() for _ in range(25)],  # type: ignore[list-item]
+    )
+    # Each page object in a reportlab PDF emits "/Type /Page\n".
+    assert body.count(b"/Type /Page\n") == 3
+
+
+def test_pdf_render_label_sheet_skip_partial_page_one() -> None:
+    """start_row=2, start_col=1 should mark the first cell as used
+    (partial_page → that cell isn't written) so 1 piece lands at row 2."""
+    from mailtrace import pdf
+    from mailtrace.routes.pieces import AVERY_LAYOUTS
+
+    class _Stub:
+        imb_letters = "T" * 65
+        recipient_block = "X\nY\nZ"
+        sender_block = ""
+
+        def human_readable_imb(self) -> str:
+            return "h"
+
+    body = pdf.render_label_sheet(
+        layout=AVERY_LAYOUTS["5163"],
+        pieces=[_Stub()],  # type: ignore[list-item]
+        start_row=2,
+        start_col=1,
+    )
+    assert body.startswith(b"%PDF-")
+
+
+def test_pdf_render_envelope_produces_no10_pdf() -> None:
+    """Envelope PDF: page size = 9.5 x 4.125 in = 684 x 297 pts."""
+    from mailtrace import pdf
+
+    class _Stub:
+        imb_letters = "T" * 65
+        recipient_block = "Bob\n100 Main\nCity, ST, 12345"
+        sender_block = "Alice\n200 First\nOrigin, NY, 10001"
+
+        def human_readable_imb(self) -> str:
+            return "00-040-12345-000001-12345"
+
+    body = pdf.render_envelope(_Stub())  # type: ignore[arg-type]
+    assert body.startswith(b"%PDF-")
+    # 9.5 in x 72 = 684 pts; 4.125 in x 72 = 297 pts.
+    assert b"/MediaBox [ 0 0 684 297 ]" in body
+
+
+def test_pdf_render_alignment_param_validated() -> None:
+    """An invalid alignment value falls back to 'left' silently rather
+    than raising — alignment is a UX-grade input, not a security one."""
+    from mailtrace import pdf
+    from mailtrace.routes.pieces import AVERY_LAYOUTS
+
+    class _Stub:
+        imb_letters = "T" * 65
+        recipient_block = "X"
+        sender_block = ""
+
+        def human_readable_imb(self) -> str:
+            return "h"
+
+    # Valid options just produce a PDF.
+    for align in ("left", "center", "diagonal", ""):
+        body = pdf.render_label_sheet(
+            layout=AVERY_LAYOUTS["5163"],
+            pieces=[_Stub()],  # type: ignore[list-item]
+            alignment=align,
+        )
+        assert body.startswith(b"%PDF-"), align

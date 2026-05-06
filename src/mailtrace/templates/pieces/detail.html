@@ -54,16 +54,28 @@
 <div class="card">
     <h2>Print</h2>
     <p>
-        <a href="/pieces/{{ piece.id }}/download/envelope.pdf">Envelope PDF</a>
+        <a href="/pieces/{{ piece.id }}/download/envelope.pdf">Envelope PDF (download)</a>
         &middot;
-        <a href="/pieces/{{ piece.id }}/download/envelope.html">Envelope HTML</a>
+        <a href="/pieces/{{ piece.id }}/download/envelope.pdf?inline=1" target="_blank" rel="noopener">Preview in new tab</a>
     </p>
+    <p><small>Or print this single piece onto a partial Avery sheet:</small></p>
     <form action="/pieces/{{ piece.id }}/download/avery.pdf" method="get">
         <div class="row">
-            <div><label>Avery row (1-5)</label><input type="number" name="row" min="1" max="5" value="1"></div>
-            <div><label>Avery col (1-2)</label><input type="number" name="col" min="1" max="2" value="1"></div>
+            <div><label>Avery row</label><input type="number" name="row" min="1" max="10" value="1"></div>
+            <div><label>Avery col</label><input type="number" name="col" min="1" max="2" value="1"></div>
+            <div>
+                <label>Sheet</label>
+                <select name="layout">
+                    <option value="5163" selected>5163 — 4″×2″ (10/sheet)</option>
+                    <option value="5162">5162 — 4″×1⅓″ (14/sheet)</option>
+                    <option value="5161">5161 — 4″×1″ (20/sheet)</option>
+                </select>
+            </div>
         </div>
-        <p><button type="submit" class="secondary">Avery 8163 PDF</button></p>
+        <p>
+            <button type="submit" class="secondary">Single-piece Avery PDF</button>
+            <a href="/pieces/sheet/setup">…or use the multi-piece sheet builder →</a>
+        </p>
     </form>
 </div>
 

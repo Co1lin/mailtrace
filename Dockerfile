@@ -18,7 +18,7 @@ COPY src ./src
 # Install runtime deps (no dev) into /app/.venv from the locked manifest.
 RUN uv venv /app/.venv && uv sync --no-dev --frozen
 
-# ---- runtime: minimal image with wkhtmltopdf and a non-root user ----
+# ---- runtime: minimal image with reportlab fonts + a non-root user ----
 FROM python:${PYTHON_VERSION}-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -27,13 +27,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MAILTRACE_HOST=0.0.0.0 \
     MAILTRACE_PORT=8080
 
-# wkhtmltopdf for PDF rendering, plus serif fonts for the recipient block.
+# PDF generation is now pure Python (reportlab + pylabels) — no
+# wkhtmltopdf/Qt dependency. Only system fonts are needed: DejaVu Serif
+# for the recipient block. The IMb font ships in the package itself.
+# curl is kept for the HEALTHCHECK below.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        wkhtmltopdf \
-        fonts-dejavu-core \
         ca-certificates \
         curl \
+        fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --create-home --uid 10001 mailtrace

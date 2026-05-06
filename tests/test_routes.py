@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-import pytest
 import pytest_asyncio
 from fakeredis import FakeAsyncRedis
 from fastapi import FastAPI
@@ -256,9 +255,10 @@ async def test_create_piece_inline_then_download(
     assert detail.status_code == 200
     assert "rent check" in detail.text
 
-    dl = await client.get(f"/pieces/{piece_id}/download/envelope.html")
+    dl = await client.get(f"/pieces/{piece_id}/download/envelope.pdf")
     assert dl.status_code == 200
-    assert "USPSIMBStandard" in dl.text
+    assert dl.headers["content-type"] == "application/pdf"
+    assert dl.content.startswith(b"%PDF")
 
     from mailtrace.models import MailPiece
 
@@ -1799,51 +1799,175 @@ async def test_admin_cannot_delete_last_admin(
 # ---------------------------------------------------------------------------
 
 
-async def test_sticker_sheet_renders_html(
-    client: AsyncClient, db_sessionmaker: async_sessionmaker
+async def test_sticker_sheet_renders_pdf_inline(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
 ) -> None:
-    # Create three pieces.
-    pids = []
-    for label in ("a", "b", "c"):
-        resp = await client.post(
-            "/pieces/new",
-            data={
-                "label": label,
-                "recipient_name": "Bob",
-                "recipient_street": "200 Market St",
-                "recipient_city": "Sometown",
-                "recipient_state": "CA",
-                "recipient_zip": "94105",
-                "include_zip_in_imb": "true",
-            },
-            follow_redirects=False,
-        )
-        pids.append(int(resp.headers["location"].rsplit("/", 1)[-1]))
+    """Inline preview returns the PDF with Content-Disposition: inline
+    (so the browser embeds it instead of downloading) and does NOT
+    transition pieces to printed. Uses the batch endpoint to create
+    pieces in 'generated' state (stock) — single-piece /pieces/new
+    defaults to in_flight."""
+    from mailtrace.models import Address
 
-    # Render starting at row 2, col 2 — page 1 has 2 cells used (r2c2, r3c1),
-    # third cell r3c2.
+    async with db_sessionmaker() as db:
+        a = Address(user_id=regular_user.id, label="rcpt", role="recipient", zip="94105")
+        db.add(a)
+        await db.commit()
+        await db.refresh(a)
+        a_id = a.id
+    await client.post(
+        "/pieces/batch",
+        data={"row-0-recipient_id": str(a_id), "row-0-count": "3"},
+        follow_redirects=False,
+    )
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        ids = [str(p.id) for p in rows]
+        assert all(p.status == "generated" for p in rows)
+
     sheet = await client.post(
         "/pieces/sheet",
         data={
-            "ids": [str(p) for p in pids],
+            "ids": ids,
             "start_row": "2",
             "start_col": "2",
-            "doc_type": "html",
+            "disposition": "inline",
         },
     )
     assert sheet.status_code == 200
-    assert "USPSIMBStandard" in sheet.text
-    # First piece is at row 2, col 2 on Avery 5163 spec geometry:
-    #   top  = 0.5    + 1 * 2.0    = 2.5in
-    #   left = 5/32"  + 1 * 4.1875 = 4.34375in   (5/32 = 0.15625)
-    assert "top: 2.5000in" in sheet.text
-    assert "left: 4.3438in" in sheet.text
+    assert sheet.headers["content-type"] == "application/pdf"
+    assert sheet.headers["content-disposition"].startswith("inline")
+    assert sheet.content.startswith(b"%PDF")
+    # Inline preview must NOT transition stock → printed.
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        assert all(p.status == "generated" for p in rows), (
+            f"inline preview unexpectedly mutated piece status: {[p.status for p in rows]}"
+        )
+
+
+async def test_sticker_sheet_default_download_does_not_mark_printed(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """Downloading the PDF without the explicit `mark_as_printed` checkbox
+    must NOT mutate piece status — clicking 'Generate' is for rendering,
+    not for confirming the physical print happened."""
+    from mailtrace.models import Address
+
+    async with db_sessionmaker() as db:
+        a = Address(user_id=regular_user.id, label="rcpt", role="recipient", zip="94105")
+        db.add(a)
+        await db.commit()
+        await db.refresh(a)
+        a_id = a.id
+    await client.post(
+        "/pieces/batch",
+        data={"row-0-recipient_id": str(a_id), "row-0-count": "1"},
+        follow_redirects=False,
+    )
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        ids = [str(p.id) for p in rows]
+        assert all(p.status == "generated" for p in rows)
+
+    sheet = await client.post(
+        "/pieces/sheet",
+        data={"ids": ids, "start_row": "1", "start_col": "1"},
+    )
+    assert sheet.status_code == 200
+    assert sheet.headers["content-disposition"].startswith("attachment")
+    assert sheet.content.startswith(b"%PDF")
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        assert all(p.status == "generated" for p in rows), (
+            f"download without checkbox unexpectedly marked pieces: {[p.status for p in rows]}"
+        )
+
+
+async def test_sticker_sheet_mark_as_printed_checkbox_marks_printed(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """When the user explicitly ticks `mark_as_printed=true`, generated
+    pieces transition to printed (and printed_at gets stamped)."""
+    from mailtrace.models import Address
+
+    async with db_sessionmaker() as db:
+        a = Address(user_id=regular_user.id, label="rcpt", role="recipient", zip="94105")
+        db.add(a)
+        await db.commit()
+        await db.refresh(a)
+        a_id = a.id
+    await client.post(
+        "/pieces/batch",
+        data={"row-0-recipient_id": str(a_id), "row-0-count": "2"},
+        follow_redirects=False,
+    )
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        ids = [str(p.id) for p in rows]
+
+    sheet = await client.post(
+        "/pieces/sheet",
+        data={
+            "ids": ids,
+            "start_row": "1",
+            "start_col": "1",
+            "mark_as_printed": "true",
+        },
+    )
+    assert sheet.status_code == 200
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        assert all(p.status == "printed" for p in rows)
+        assert all(p.printed_at is not None for p in rows)
+
+
+async def test_sticker_sheet_mark_as_printed_works_with_inline_too(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """The mark_as_printed flag is independent of disposition — a user
+    who previewed first and is happy can preview-then-tick to commit
+    without re-rendering as attachment."""
+    from mailtrace.models import Address
+
+    async with db_sessionmaker() as db:
+        a = Address(user_id=regular_user.id, label="rcpt", role="recipient", zip="94105")
+        db.add(a)
+        await db.commit()
+        await db.refresh(a)
+        a_id = a.id
+    await client.post(
+        "/pieces/batch",
+        data={"row-0-recipient_id": str(a_id), "row-0-count": "1"},
+        follow_redirects=False,
+    )
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        ids = [str(p.id) for p in rows]
+
+    sheet = await client.post(
+        "/pieces/sheet",
+        data={
+            "ids": ids,
+            "start_row": "1",
+            "start_col": "1",
+            "disposition": "inline",
+            "mark_as_printed": "true",
+        },
+    )
+    assert sheet.status_code == 200
+    assert sheet.headers["content-disposition"].startswith("inline")
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        assert all(p.status == "printed" for p in rows)
 
 
 async def test_sticker_sheet_paginates_when_overflow(
     client: AsyncClient,
 ) -> None:
-    # 12 pieces, sheet holds 10 → should produce 2 pages.
+    """12 pieces on a 5163 sheet (10/page) should produce a 2-page PDF.
+    We don't pull in a full PDF parser just for page-count — counting
+    `/Type /Page\n` markers in the raw stream is sufficient."""
     pids = []
     for i in range(12):
         resp = await client.post(
@@ -1866,12 +1990,15 @@ async def test_sticker_sheet_paginates_when_overflow(
             "ids": [str(p) for p in pids],
             "start_row": "1",
             "start_col": "1",
-            "doc_type": "html",
+            "disposition": "inline",
         },
     )
     assert sheet.status_code == 200
-    # Two <div class="page"> blocks.
-    assert sheet.text.count('class="page"') == 2
+    assert sheet.content.startswith(b"%PDF")
+    # Each page object in a reportlab PDF emits "/Type /Page\n" (no /Pages).
+    # Two-page PDFs have two such markers.
+    page_markers = sheet.content.count(b"/Type /Page\n")
+    assert page_markers == 2, f"expected 2 page objects, got {page_markers}"
 
 
 async def test_sticker_sheet_rejects_other_users_pieces(
@@ -1943,6 +2070,47 @@ async def test_sticker_sheet_setup_includes_recent_selector(
     assert "data-created-at=" in page.text
 
 
+async def test_sticker_sheet_setup_renders_radio_picker_and_layouts_json(
+    client: AsyncClient,
+) -> None:
+    """The sheet-setup page should expose layouts as a radio-button group
+    (all visible at once, not hidden in a dropdown), embed the layouts
+    dict as JSON for the visual picker JS, and emit the picker container.
+    The generate buttons appear once the user has at least one piece."""
+    # Need at least one piece so the generate buttons render (they're inside
+    # the {% else %} branch of the empty-state guard).
+    await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    page = await client.get("/pieces/sheet/setup")
+    assert page.status_code == 200
+    # Radio inputs (one per layout), not <select>.
+    assert '<input type="radio" name="layout"' in page.text
+    assert '<select name="layout"' not in page.text
+    # Visual picker container + hidden start_row/start_col inputs.
+    assert 'id="sheet-picker"' in page.text
+    assert 'name="start_row"' in page.text and 'type="hidden"' in page.text
+    # Layouts JSON embedded for client-side picker.
+    assert 'id="layouts-data"' in page.text
+    assert '"5163"' in page.text  # appears in the JSON
+    # Generate PDF (download) submit + Preview button (inline iframe).
+    assert 'name="disposition" value="attachment"' in page.text
+    assert 'id="preview-btn"' in page.text
+    assert 'id="preview-pane"' in page.text
+    # Alignment radio group (left/center).
+    assert 'name="alignment" value="left"' in page.text
+    assert 'name="alignment" value="center"' in page.text
+
+
 async def test_sticker_sheet_setup_lists_all_layouts(client: AsyncClient) -> None:
     """The setup page should expose every supported Avery layout in the
     selector, including alias model numbers so users picking 8163 land on
@@ -1960,8 +2128,9 @@ async def test_sticker_sheet_setup_lists_all_layouts(client: AsyncClient) -> Non
 async def test_sticker_sheet_renders_5161(
     client: AsyncClient, db_sessionmaker: async_sessionmaker
 ) -> None:
-    """Submitting layout=5161 should use the 4x1 layout: row 1 col 1
-    starts at (top=0.5in, left=0.15625in) and the page holds 20 labels."""
+    """Submitting layout=5161 should produce a one-page PDF (3 pieces fit
+    easily on a 20-cell sheet). Smoke test that the geometry passthrough
+    works for the 4x1 layout."""
     pids = []
     for i in range(3):
         resp = await client.post(
@@ -1985,24 +2154,21 @@ async def test_sticker_sheet_renders_5161(
             "ids": [str(p) for p in pids],
             "start_row": "1",
             "start_col": "1",
-            "doc_type": "html",
             "layout": "5161",
+            "disposition": "inline",
         },
     )
     assert sheet.status_code == 200
-    # 5161 css class is applied — variant-specific font sizes kick in.
-    assert "label-5161" in sheet.text
-    # First cell at (0.5, 0.15625), second cell same row col 2 at left = 0.15625 + 4.1875 = 4.34375.
-    assert "top: 0.5000in" in sheet.text
-    # 0.15625 → "0.1562" because Python's %.4f rounds half-to-even (2 is even).
-    assert "left: 0.1562in" in sheet.text
+    assert sheet.content.startswith(b"%PDF")
+    # 3 pieces on a 20-cell page → 1 page.
+    assert sheet.content.count(b"/Type /Page\n") == 1
 
 
 async def test_sticker_sheet_resolves_alias_8163_to_5163(
     client: AsyncClient,
 ) -> None:
-    """layout=8163 is a sister model number for 5163 and must produce
-    the same geometry."""
+    """layout=8163 is a sister model number for 5163; the route should
+    accept it and render successfully (no 400)."""
     resp = await client.post(
         "/pieces/new",
         data={
@@ -2023,13 +2189,12 @@ async def test_sticker_sheet_resolves_alias_8163_to_5163(
             "ids": [str(pid)],
             "start_row": "1",
             "start_col": "1",
-            "doc_type": "html",
             "layout": "8163",
+            "disposition": "inline",
         },
     )
     assert sheet.status_code == 200
-    # 8163 → 5163 layout, so the css class is label-5163.
-    assert "label-5163" in sheet.text
+    assert sheet.content.startswith(b"%PDF")
 
 
 async def test_sticker_sheet_rejects_unknown_layout(client: AsyncClient) -> None:
@@ -2052,8 +2217,8 @@ async def test_sticker_sheet_rejects_unknown_layout(client: AsyncClient) -> None
             "ids": [str(pid)],
             "start_row": "1",
             "start_col": "1",
-            "doc_type": "html",
             "layout": "9999",
+            "disposition": "inline",
         },
     )
     assert sheet.status_code == 400
@@ -2084,8 +2249,8 @@ async def test_sticker_sheet_rejects_start_row_exceeding_layout(
             "ids": [str(pid)],
             "start_row": "8",
             "start_col": "1",
-            "doc_type": "html",
             "layout": "5163",
+            "disposition": "inline",
         },
     )
     assert too_high.status_code == 400
@@ -2096,11 +2261,55 @@ async def test_sticker_sheet_rejects_start_row_exceeding_layout(
             "ids": [str(pid)],
             "start_row": "8",
             "start_col": "1",
-            "doc_type": "html",
             "layout": "5161",
+            "disposition": "inline",
         },
     )
     assert ok.status_code == 200
+
+
+async def test_sticker_sheet_alignment_param_accepts_left_or_center(
+    client: AsyncClient,
+) -> None:
+    """The new `alignment` form field accepts 'left' or 'center' and
+    rejects anything else with 400."""
+    resp = await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    pid = int(resp.headers["location"].rsplit("/", 1)[-1])
+    for align in ("left", "center"):
+        ok = await client.post(
+            "/pieces/sheet",
+            data={
+                "ids": [str(pid)],
+                "start_row": "1",
+                "start_col": "1",
+                "alignment": align,
+                "disposition": "inline",
+            },
+        )
+        assert ok.status_code == 200, align
+        assert ok.content.startswith(b"%PDF")
+    bad = await client.post(
+        "/pieces/sheet",
+        data={
+            "ids": [str(pid)],
+            "start_row": "1",
+            "start_col": "1",
+            "alignment": "diagonal",
+            "disposition": "inline",
+        },
+    )
+    assert bad.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -2832,58 +3041,6 @@ async def test_status_filter_tabs(
         stock_ids = [p.id for p in rows if p.status == "generated"]
     for sid in stock_ids:
         assert f"/pieces/{sid}" not in only_in_flight.text
-
-
-async def test_sheet_pdf_marks_generated_as_printed(
-    client: AsyncClient,
-    db_sessionmaker: async_sessionmaker,
-    regular_user: User,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Rendering a sticker sheet as HTML doesn't change state, but rendering
-    as PDF transitions stock pieces to printed."""
-    # Stub out wkhtmltopdf — we only care about the state side-effect.
-    from mailtrace import pdf as pdf_mod
-
-    monkeypatch.setattr(pdf_mod, "render", lambda html, *, options: b"%PDF-stub")
-
-    from mailtrace.models import Address
-
-    async with db_sessionmaker() as db:
-        a = Address(user_id=regular_user.id, label="alice", role="recipient", zip="94105")
-        db.add(a)
-        await db.commit()
-        await db.refresh(a)
-        a_id = a.id
-    await client.post(
-        "/pieces/batch",
-        data={"row-0-recipient_id": str(a_id), "row-0-count": "2"},
-        follow_redirects=False,
-    )
-    async with db_sessionmaker() as db:
-        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
-        ids = [str(p.id) for p in rows]
-
-    # HTML preview: no state change.
-    html_resp = await client.post(
-        "/pieces/sheet",
-        data={"ids": ids, "start_row": "1", "start_col": "1", "doc_type": "html"},
-    )
-    assert html_resp.status_code == 200
-    async with db_sessionmaker() as db:
-        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
-        assert all(p.status == "generated" for p in rows)
-
-    # PDF render: transitions generated → printed.
-    pdf_resp = await client.post(
-        "/pieces/sheet",
-        data={"ids": ids, "start_row": "1", "start_col": "1", "doc_type": "pdf"},
-    )
-    assert pdf_resp.status_code == 200
-    async with db_sessionmaker() as db:
-        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
-        assert all(p.status == "printed" for p in rows)
-        assert all(p.printed_at is not None for p in rows)
 
 
 async def test_scan_promotes_stock_piece_to_in_flight(

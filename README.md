@@ -525,9 +525,11 @@ uv run ruff check . && uv run mypy src
 uv run mailtrace                    # serves on http://0.0.0.0:8080
 ```
 
-For PDF generation locally, install `wkhtmltopdf` (e.g. `apt install
-wkhtmltopdf` or `brew install --cask wkhtmltopdf`). The Docker image
-already bundles it.
+PDF generation is pure Python (`reportlab` + `pylabels`) — no system
+binaries, no `wkhtmltopdf`. Just install the locked dev deps and you're
+done. For nicer-looking address blocks, install DejaVu Serif (`apt
+install fonts-dejavu-core` on Linux); without it, recipient text falls
+back to ReportLab's built-in Times-Roman.
 
 ## Project layout
 
