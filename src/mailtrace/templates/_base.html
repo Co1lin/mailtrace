@@ -34,8 +34,17 @@
         .row > * { flex: 1; }
         a { color: #1f6feb; }
         small { color: #666; }
-        table { border-collapse: collapse; width: 100%; }
-        th, td { border: 1px solid #ddd; padding: 0.4rem 0.5rem; text-align: left; font-size: 0.9rem; vertical-align: top; }
+        /* Tables: wrap a horizontal scroller around the table itself so a
+           too-wide row scrolls inside the card instead of pushing the
+           layout. Plus break long tokens (paths, error messages, IMbs)
+           inside cells so the column doesn't stretch unbounded. */
+        .card { overflow-x: auto; }
+        table { border-collapse: collapse; width: 100%; table-layout: auto; }
+        th, td {
+            border: 1px solid #ddd; padding: 0.4rem 0.5rem; text-align: left;
+            font-size: 0.9rem; vertical-align: top;
+            overflow-wrap: anywhere; word-break: break-word;
+        }
         th { background: #f5f5f5; }
         .err { color: #b00; }
         .ok { color: #197b30; }
@@ -43,7 +52,7 @@
         .pill.admin { background: #ffe4b5; }
         .pill.inactive { background: #f5b7b1; }
         .flash { padding: 0.75rem; border-radius: 6px; background: #fff5d6; border: 1px solid #f0c36d; margin: 1rem 0; }
-        code { background: #f5f5f5; padding: 0.1rem 0.3rem; border-radius: 3px; }
+        code { background: #f5f5f5; padding: 0.1rem 0.3rem; border-radius: 3px; overflow-wrap: anywhere; }
     </style>
     {% block head %}{% endblock %}
 </head>
@@ -62,5 +71,28 @@
 </nav>
 {% endif %}
 {% block body %}{% endblock %}
+<script>
+// Convert any <time data-utc="ISO-8601 in UTC">…</time> in the page to
+// the user's browser-local timezone. Server templates emit the UTC
+// timestamp as a stable fallback (text content) plus the data-utc
+// attribute for in-browser conversion. Format hint via data-fmt:
+//   "datetime" (default) → "YYYY-MM-DD HH:mm" local
+//   "date"               → "YYYY-MM-DD" local
+//   "long"               → toLocaleString() with the browser's defaults
+function _pad(n) { return String(n).padStart(2, "0"); }
+function _localFormat(d, fmt) {
+    if (fmt === "long") return d.toLocaleString();
+    const ymd = `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}`;
+    if (fmt === "date") return ymd;
+    return `${ymd} ${_pad(d.getHours())}:${_pad(d.getMinutes())}`;
+}
+document.querySelectorAll("time[data-utc]").forEach(function (el) {
+    const iso = el.getAttribute("data-utc");
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return;  // leave the server fallback in place
+    el.textContent = _localFormat(d, el.getAttribute("data-fmt") || "datetime");
+    el.setAttribute("title", d.toString());
+});
+</script>
 </body>
 </html>

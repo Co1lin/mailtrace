@@ -415,23 +415,29 @@ async def ingest_save(
     max_body_mb: Annotated[int, Form()] = 100,
     archive_payloads: Annotated[bool, Form()] = False,
     archive_dir: Annotated[str, Form()] = "",
-    leave_password_unchanged: Annotated[bool, Form()] = False,
-    rotate_password: Annotated[bool, Form()] = False,
+    # Tri-state: "keep" (no change) | "replace" (use basic_auth_pass) |
+    # "rotate" (generate). Mutually exclusive by virtue of being a single
+    # form field. Default "replace" matches the form's initial state for
+    # the new-config case (no stored password yet).
+    password_action: Annotated[str, Form()] = "replace",
 ) -> Response:
     if max_body_mb < 1 or max_body_mb > 1024:
         raise HTTPException(status_code=400, detail="max_body_mb must be 1-1024")
+    if password_action not in ("keep", "replace", "rotate"):
+        raise HTTPException(status_code=400, detail=f"unknown password_action: {password_action!r}")
     cfg = await _load_ingest_cfg(db)
     if cfg is None:
         cfg = IngestSubscription(id=1)
         db.add(cfg)
     cfg.enabled = bool(enabled)
     cfg.basic_auth_user = basic_auth_user.strip()
-    if rotate_password:
+    if password_action == "rotate":
         new_pw = secrets.token_urlsafe(32)
         cfg.basic_auth_pass = new_pw
         request.session["ingest_flash_password"] = new_pw
-    elif not leave_password_unchanged:
+    elif password_action == "replace":
         cfg.basic_auth_pass = basic_auth_pass
+    # password_action == "keep" → leave cfg.basic_auth_pass untouched
     cfg.expect_gzip = bool(expect_gzip)
     cfg.max_body_mb = int(max_body_mb)
     cfg.archive_payloads = bool(archive_payloads)

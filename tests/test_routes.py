@@ -1001,8 +1001,7 @@ async def test_admin_ingest_save_and_rotate(
         data={
             "enabled": "true",
             "basic_auth_user": "iv_user",
-            "rotate_password": "true",
-            "leave_password_unchanged": "true",  # ignored when rotate set
+            "password_action": "rotate",
             "max_body_mb": "50",
         },
         follow_redirects=False,
@@ -1014,6 +1013,58 @@ async def test_admin_ingest_save_and_rotate(
         ).scalar_one()
         assert cfg.basic_auth_pass != old_pw
         assert len(cfg.basic_auth_pass) >= 32
+
+
+async def test_admin_ingest_password_action_keep_preserves_existing(
+    admin_client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """password_action=keep must NOT clobber the stored password, even if
+    the (disabled-by-the-UI) password input gets sent as empty."""
+    # First save with a real password.
+    await admin_client.post(
+        "/admin/ingest",
+        data={
+            "enabled": "true",
+            "basic_auth_user": "iv_user",
+            "basic_auth_pass": "original-secret-pwd-1234",
+            "password_action": "replace",
+            "max_body_mb": "100",
+        },
+    )
+    # Second save with action=keep + empty password input → original retained.
+    await admin_client.post(
+        "/admin/ingest",
+        data={
+            "enabled": "true",
+            "basic_auth_user": "iv_user",
+            "basic_auth_pass": "",
+            "password_action": "keep",
+            "max_body_mb": "100",
+        },
+    )
+    from mailtrace.models import IngestSubscription
+
+    async with db_sessionmaker() as db:
+        cfg = (
+            await db.execute(select(IngestSubscription).where(IngestSubscription.id == 1))
+        ).scalar_one()
+        assert cfg.basic_auth_pass == "original-secret-pwd-1234"
+
+
+async def test_admin_ingest_password_action_unknown_value_400(
+    admin_client: AsyncClient,
+) -> None:
+    resp = await admin_client.post(
+        "/admin/ingest",
+        data={
+            "enabled": "false",
+            "basic_auth_user": "",
+            "basic_auth_pass": "",
+            "password_action": "nonsense",
+            "max_body_mb": "100",
+        },
+    )
+    assert resp.status_code == 400
 
 
 async def test_admin_ingest_save_rejects_enable_without_creds(

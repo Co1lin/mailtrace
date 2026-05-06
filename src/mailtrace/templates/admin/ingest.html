@@ -45,16 +45,40 @@
         <label>Basic Auth password
             {% if cfg and cfg.basic_auth_pass %}<small>(stored)</small>{% endif %}
         </label>
-        <input type="password" name="basic_auth_pass" autocomplete="new-password"
-               placeholder="{{ '•••••• (already saved; check leave-unchanged to keep)' if (cfg and cfg.basic_auth_pass) else 'paste a strong random password' }}">
-        {% if cfg and cfg.basic_auth_pass %}
-        <label><input type="checkbox" name="leave_password_unchanged" value="true" checked>
-            Keep existing password (uncheck to replace, or use rotate below)</label>
-        {% endif %}
-        <label><input type="checkbox" name="rotate_password" value="true">
-            <strong>Rotate</strong> — generate a new strong password and show it once
-            <small>(overrides the password fields above)</small>
-        </label>
+        <input type="password" name="basic_auth_pass" id="basic_auth_pass" autocomplete="new-password"
+               placeholder="{{ '•••••• (already saved; pick \"Keep existing\" below to leave it)' if (cfg and cfg.basic_auth_pass) else 'paste a strong random password' }}">
+        <fieldset style="border:1px solid #ddd; border-radius:4px; padding:0.5rem 0.75rem; margin-top:0.5rem">
+            <legend style="font-size:0.85rem; padding:0 0.3rem">Password action <small>(pick one)</small></legend>
+            {% if cfg and cfg.basic_auth_pass %}
+            <label style="font-weight:normal">
+                <input type="radio" name="password_action" value="keep" checked
+                       onchange="document.getElementById('basic_auth_pass').disabled = true">
+                <strong>Keep</strong> existing password
+            </label>
+            {% endif %}
+            <label style="font-weight:normal">
+                <input type="radio" name="password_action" value="replace"
+                       {% if not (cfg and cfg.basic_auth_pass) %}checked{% endif %}
+                       onchange="document.getElementById('basic_auth_pass').disabled = false">
+                <strong>Replace</strong> with the value typed above
+            </label>
+            <label style="font-weight:normal">
+                <input type="radio" name="password_action" value="rotate"
+                       onchange="document.getElementById('basic_auth_pass').disabled = true">
+                <strong>Rotate</strong> — generate a new strong password and show it once
+            </label>
+        </fieldset>
+        <script>
+            // Disable the password input on initial render if "Keep" or "Rotate"
+            // is the default radio. (Keeps the disabled state in sync with the
+            // initial checked radio without waiting for a click.)
+            (function () {
+                const checked = document.querySelector('input[name="password_action"]:checked');
+                if (checked && checked.value !== 'replace') {
+                    document.getElementById('basic_auth_pass').disabled = true;
+                }
+            })();
+        </script>
 
         <div class="row">
             <div>
@@ -89,7 +113,9 @@
         {% if cfg and cfg.enabled %}<span class="pill">enabled</span>{% else %}<span class="pill inactive">disabled</span>{% endif %}
         &nbsp;·&nbsp;
         <strong>Last delivery:</strong>
-        {{ cfg.last_received_at.strftime('%Y-%m-%d %H:%M %Z') if (cfg and cfg.last_received_at) else 'never' }}
+        {% if cfg and cfg.last_received_at %}
+        <time data-utc="{{ cfg.last_received_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ cfg.last_received_at.strftime('%Y-%m-%d %H:%M UTC') }}</time>
+        {% else %}never{% endif %}
     </p>
 </div>
 
@@ -118,7 +144,7 @@
         <tbody>
         {% for entry in recent_logs %}
         <tr>
-            <td>{{ entry.received_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            <td><time data-utc="{{ entry.received_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}" data-fmt="long">{{ entry.received_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}</time></td>
             <td><span class="pill">{{ entry.status }}</span></td>
             <td><code>{{ entry.source_ip or '—' }}</code></td>
             <td>{{ entry.feed_id or '—' }}</td>
@@ -127,7 +153,7 @@
             <td>{{ entry.new_scans }}</td>
             <td>{{ entry.orphaned }}</td>
             <td>{{ entry.bytes_received }}</td>
-            <td>
+            <td style="max-width: 24rem">
                 {% if entry.error %}<small class="err">{{ entry.error }}</small>
                 {% elif entry.raw_path %}<small><code>{{ entry.raw_path }}</code></small>
                 {% else %}—{% endif %}
