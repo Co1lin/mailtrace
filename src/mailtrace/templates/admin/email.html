@@ -1,5 +1,5 @@
 {% extends "_base.html" %}
-{% block title %}mailtrace - SMTP{% endblock %}
+{% block title %}MailTrace - SMTP{% endblock %}
 {% block body %}
 <h1>Admin · email (SMTP)</h1>
 <p><a href="/admin/">&larr; user list</a></p>
@@ -46,7 +46,7 @@
         <input type="email" name="from_address" required value="{{ cfg.from_address if cfg else '' }}" placeholder="you@yourorg.com">
 
         <label>From display name <small>(optional)</small></label>
-        <input type="text" name="from_name" value="{{ cfg.from_name if cfg else '' }}" placeholder="mailtrace">
+        <input type="text" name="from_name" value="{{ cfg.from_name if cfg else '' }}" placeholder="MailTrace">
 
         <label>Public base URL <small>(used to build links in emails, e.g. https://mailtrace.example.com)</small></label>
         <input type="url" name="public_base_url" value="{{ cfg.public_base_url if cfg else '' }}" placeholder="https://mailtrace.example.com">
@@ -91,8 +91,8 @@
         <li>Way better deliverability than residential / consumer SMTP — recipients won't bin your scan digests.</li>
         <li>No MFA / app-password / "did the provider disable basic auth this quarter?" dance.</li>
         <li>Revocable per-app API keys; rotation is one-click in the dashboard.</li>
-        <li>Dedicated webhooks for bounces and complaints (mailtrace doesn't consume them yet, but they're there if you need to debug).</li>
-        <li>Free tiers (SendGrid 100/day, Resend 3000/mo, Postmark 100/mo at signup) easily cover even an active mailtrace user.</li>
+        <li>Dedicated webhooks for bounces and complaints (MailTrace doesn't consume them yet, but they're there if you need to debug).</li>
+        <li>Free tiers (SendGrid 100/day, Resend 3000/mo, Postmark 100/mo at signup) easily cover even an active MailTrace user.</li>
     </ul>
 </div>
 
@@ -121,7 +121,7 @@
        rollout is now near-universal: <em>app passwords no longer help</em>. There is no
        per-mailbox toggle that overrides the tenant decision. The only way to send
        <em>from</em> an M365 mailbox over SMTP today is OAuth2 + the <code>SMTP.Send</code>
-       Graph permission via an Azure AD app registration — which mailtrace doesn't yet
+       Graph permission via an Azure AD app registration — which MailTrace doesn't yet
        implement, because the simpler answer is to use a transactional relay (above).</p>
     <p>If you want delivery to look like it came from your M365 address, the practical
        workflow is:</p>
@@ -129,7 +129,7 @@
         <li>Sign up for a transactional relay (Resend, Postmark, etc.).</li>
         <li>In the relay's dashboard, verify your custom domain by adding the DKIM CNAMEs
             and SPF includes they tell you to add to your DNS.</li>
-        <li>Once verified, set <em>From address</em> in mailtrace to <code>you@yourcompany.com</code> —
+        <li>Once verified, set <em>From address</em> in MailTrace to <code>you@yourcompany.com</code> —
             mail goes out via the relay's IPs but DKIM-signed by your domain, so recipients
             see "from you@yourcompany.com" with valid DMARC.</li>
         <li>You can also set up a forwarding rule in M365 so replies to that address still

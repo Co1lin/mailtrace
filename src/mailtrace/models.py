@@ -7,6 +7,7 @@ import datetime as dt
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -212,6 +213,17 @@ class MailPiece(Base):
     last_notified_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    # Drop-off record — when + where the user actually mailed this piece.
+    # Both fields are independent of `mailed_at` (the lifecycle marker that
+    # gates polling) and of `created_at` (when the record was first made).
+    # `shipped_from` is the display string ("Anchorage Post Office" or just
+    # lat/lng); the optional paired decimal-degrees columns enable a future
+    # map view. All four default empty/null — recording is opt-in.
+    shipped_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    shipped_from: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    shipped_from_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shipped_from_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     user: Mapped[User] = relationship()
     sender_address: Mapped[Address | None] = relationship(foreign_keys=[sender_address_id])

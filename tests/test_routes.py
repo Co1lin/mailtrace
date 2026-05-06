@@ -3245,11 +3245,16 @@ async def test_pieces_list_renders_bulk_set_label_form(
     assert 'name="label"' in page.text and 'maxlength="80"' in page.text
 
 
-async def test_piece_detail_label_now_button_is_present(
+async def test_piece_detail_drop_off_form_has_when_and_where(
     client: AsyncClient,
 ) -> None:
-    """The per-piece label edit form should include a '+ Now' button
-    that JS-appends the current local timestamp to the input value."""
+    """The per-piece drop-off form should expose:
+    - a datetime-local input for shipped_at (visible) + hidden UTC field
+    - a 📅 Now button that snaps to current time
+    - a free-form text input for the location
+    - a 📍 Use my location button that calls geolocation
+    - all three save together via POST /pieces/{id}/shipped
+    """
     resp = await client.post(
         "/pieces/new",
         data={
@@ -3265,11 +3270,172 @@ async def test_piece_detail_label_now_button_is_present(
     pid = int(resp.headers["location"].rsplit("/", 1)[-1])
     page = await client.get(f"/pieces/{pid}")
     assert page.status_code == 200
-    assert 'id="piece-label-input"' in page.text
-    assert 'id="piece-label-now-btn"' in page.text
-    # The JS must reference the input + format a timestamp.
-    assert "piece-label-input" in page.text
-    assert "getFullYear" in page.text or "toISOString" in page.text
+    # Form posts to /shipped with the three logical fields.
+    assert f'action="/pieces/{pid}/shipped"' in page.text
+    assert 'name="shipped_at"' in page.text
+    assert 'name="shipped_from"' in page.text
+    assert 'name="shipped_from_lat"' in page.text
+    assert 'name="shipped_from_lng"' in page.text
+    # Quick-set buttons.
+    assert 'id="ship-at-now-btn"' in page.text
+    assert 'id="ship-from-locate-btn"' in page.text
+    # JS uses geolocation API + ISO conversion.
+    assert "navigator.geolocation" in page.text
+    assert "toISOString" in page.text
+
+
+async def test_piece_set_shipped_persists_when_and_where(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """POST /pieces/{id}/shipped sets all four fields atomically. UTC
+    ISO from the JS round-trips correctly into a tz-aware datetime."""
+    from mailtrace.models import MailPiece
+
+    resp = await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    pid = int(resp.headers["location"].rsplit("/", 1)[-1])
+
+    save = await client.post(
+        f"/pieces/{pid}/shipped",
+        data={
+            "shipped_at": "2026-05-06T18:30:00.000Z",
+            "shipped_from": "Anchorage Post Office (61.21810, -149.90030)",
+            "shipped_from_lat": "61.21810",
+            "shipped_from_lng": "-149.90030",
+        },
+        follow_redirects=False,
+    )
+    assert save.status_code == 303
+    async with db_sessionmaker() as db:
+        piece = await db.get(MailPiece, pid)
+        assert piece is not None
+        # SQLite strips tz on round-trip; the codebase convention is "naive
+        # = UTC" (see services._ensure_aware_or). What matters is that the
+        # stored value reflects 18:30 UTC from the input.
+        assert piece.shipped_at is not None
+        assert piece.shipped_at.year == 2026 and piece.shipped_at.month == 5
+        assert piece.shipped_at.day == 6 and piece.shipped_at.hour == 18
+        assert piece.shipped_at.minute == 30
+        assert piece.shipped_from == "Anchorage Post Office (61.21810, -149.90030)"
+        assert piece.shipped_from_lat is not None
+        assert abs(piece.shipped_from_lat - 61.2181) < 1e-4
+        assert abs(piece.shipped_from_lng - -149.9003) < 1e-4
+
+    # Empty inputs clear all four fields.
+    await client.post(
+        f"/pieces/{pid}/shipped",
+        data={"shipped_at": "", "shipped_from": "", "shipped_from_lat": "", "shipped_from_lng": ""},
+        follow_redirects=False,
+    )
+    async with db_sessionmaker() as db:
+        piece = await db.get(MailPiece, pid)
+        assert piece is not None
+        assert piece.shipped_at is None
+        assert piece.shipped_from == ""
+        assert piece.shipped_from_lat is None
+        assert piece.shipped_from_lng is None
+
+    # Out-of-range lat/lng silently dropped (text + time still apply).
+    await client.post(
+        f"/pieces/{pid}/shipped",
+        data={
+            "shipped_at": "",
+            "shipped_from": "somewhere weird",
+            "shipped_from_lat": "999",
+            "shipped_from_lng": "abc",
+        },
+        follow_redirects=False,
+    )
+    async with db_sessionmaker() as db:
+        piece = await db.get(MailPiece, pid)
+        assert piece is not None
+        assert piece.shipped_from == "somewhere weird"
+        assert piece.shipped_from_lat is None
+        assert piece.shipped_from_lng is None
+
+
+async def test_bulk_set_shipped_applies_to_all_selected(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """Bulk action `set_shipped` writes the same drop-off record to
+    every selected piece — when, where, lat, lng, atomically."""
+    from mailtrace.models import Address
+
+    async with db_sessionmaker() as db:
+        a = Address(user_id=regular_user.id, label="rcpt", role="recipient", zip="94105")
+        db.add(a)
+        await db.commit()
+        await db.refresh(a)
+        a_id = a.id
+    await client.post(
+        "/pieces/batch",
+        data={"row-0-recipient_id": str(a_id), "row-0-count": "3"},
+        follow_redirects=False,
+    )
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        ids = [str(p.id) for p in rows]
+
+    await client.post(
+        "/pieces/bulk-action",
+        data={
+            "ids": ids,
+            "action": "set_shipped",
+            "shipped_at": "2026-05-06T20:00:00.000Z",
+            "shipped_from": "Coffee Shop on 5th",
+            "shipped_from_lat": "37.77490",
+            "shipped_from_lng": "-122.41940",
+        },
+        follow_redirects=False,
+    )
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        for p in rows:
+            assert p.shipped_at is not None
+            assert p.shipped_at.hour == 20
+            assert p.shipped_from == "Coffee Shop on 5th"
+            assert abs(p.shipped_from_lat - 37.7749) < 1e-4
+            assert abs(p.shipped_from_lng - -122.4194) < 1e-4
+
+
+async def test_pieces_list_renders_bulk_drop_off_form(
+    client: AsyncClient,
+) -> None:
+    """The pieces list active view should expose the bulk drop-off
+    form: datetime-local + 📅 Now + text + 📍 Use my location, plus
+    the unified Apply button (action=set_shipped). Hidden in the
+    archived view."""
+    await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    page = await client.get("/pieces/")
+    assert page.status_code == 200
+    assert 'name="action" value="set_shipped"' in page.text
+    assert 'name="shipped_at"' in page.text
+    assert 'name="shipped_from"' in page.text
+    assert 'id="bulk-shipped-at-now-btn"' in page.text
+    assert 'id="bulk-ship-locate-btn"' in page.text
+    # No more +Now button on the bulk-label form.
+    assert 'id="bulk-label-now-btn"' not in page.text
 
 
 async def test_base_template_includes_global_shift_click_handler(

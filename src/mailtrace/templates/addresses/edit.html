@@ -1,5 +1,5 @@
 {% extends "_base.html" %}
-{% block title %}mailtrace - {% if address %}edit{% else %}new{% endif %} address{% endblock %}
+{% block title %}MailTrace - {% if address %}edit{% else %}new{% endif %} address{% endblock %}
 {% block body %}
 <h1>{% if address %}Edit address{% else %}New address{% endif %}</h1>
 {% if error %}<p class="err">{{ error }}</p>{% endif %}

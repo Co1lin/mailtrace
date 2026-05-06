@@ -75,6 +75,14 @@ def _ensure_sqlite_dir(database_url: str) -> None:
 _ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # (table, column, full DDL fragment after ADD COLUMN)
     ("users", "timezone", "VARCHAR(64)"),
+    # Drop-off record (when + where) for future map-overview features.
+    # `shipped_from` defaults to "" so existing rows materialize cleanly
+    # when the NOT-NULL column is added by SQLite (which ignores the
+    # NOT NULL on ALTER unless a DEFAULT is given).
+    ("mailpieces", "shipped_at", "TIMESTAMP"),
+    ("mailpieces", "shipped_from", "VARCHAR(200) NOT NULL DEFAULT ''"),
+    ("mailpieces", "shipped_from_lat", "FLOAT"),
+    ("mailpieces", "shipped_from_lng", "FLOAT"),
 )
 
 
@@ -323,7 +331,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await engine.dispose()
 
     app = FastAPI(
-        title="mailtrace",
+        title="MailTrace",
         version="0.1.0",
         description="USPS first-class mail envelope generator with IMb tracking.",
         root_path=settings.root_path,

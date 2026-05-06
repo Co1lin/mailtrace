@@ -296,7 +296,7 @@ async def test_notify(request: Request, db: SessionDep) -> Response:
     target = (user.notify_email or user.email).strip()
     msg = OutgoingMessage(
         to=target,
-        subject="mailtrace notification test",
+        subject="MailTrace notification test",
         body_text=(
             f"This is a test notification for {user.email}.\n"
             "If you got this, scan-update emails will reach you at this address.\n"

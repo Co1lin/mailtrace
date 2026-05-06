@@ -1,5 +1,5 @@
 {% extends "_base.html" %}
-{% block title %}mailtrace - pieces{% endblock %}
+{% block title %}MailTrace - pieces{% endblock %}
 {% block body %}
 <h1>Pieces</h1>
 <div class="action-row">
@@ -71,10 +71,97 @@
 <p style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap">
     <label style="margin:0">Set label on selected:</label>
     <input type="text" name="label" maxlength="80"
-           placeholder="e.g. shipped from Alaska Mar 12 — replaces existing label"
+           placeholder="free-form annotation — replaces existing label"
            style="flex:1; min-width:18rem">
     <button type="submit" name="action" value="set_label" class="secondary">Apply label</button>
 </p>
+<div style="border:1px dashed #ccc; border-radius:4px; padding:0.5rem 0.7rem; margin:0.5rem 0">
+    <strong>Drop-off record</strong> <small>(set when + where you mailed the selected pieces)</small>
+    <p style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; margin:0.4rem 0">
+        <label style="margin:0">When</label>
+        <input type="datetime-local" id="bulk-shipped-at-local" style="flex:0 1 16rem">
+        <input type="hidden" name="shipped_at" id="bulk-shipped-at-utc" value="">
+        <button type="button" class="secondary" id="bulk-shipped-at-now-btn"
+                title="Set to current local time">📅 Now</button>
+    </p>
+    <p style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; margin:0.4rem 0">
+        <label style="margin:0">Where</label>
+        <input type="text" name="shipped_from" id="bulk-ship-input" maxlength="200"
+               placeholder="e.g. Anchorage Post Office — type or use 📍 button"
+               style="flex:1; min-width:14rem">
+        <input type="hidden" name="shipped_from_lat" id="bulk-ship-lat" value="">
+        <input type="hidden" name="shipped_from_lng" id="bulk-ship-lng" value="">
+        <button type="button" class="secondary" id="bulk-ship-locate-btn"
+                title="Use the browser's geolocation API">📍 Use my location</button>
+    </p>
+    <p style="margin:0.4rem 0">
+        <button type="submit" name="action" value="set_shipped" class="secondary">Apply drop-off record</button>
+        <small id="bulk-ship-status" style="margin-left:0.5rem; color:#666"></small>
+    </p>
+    <p style="margin:0"><small>Empty fields clear that part — e.g. setting only "When"
+       leaves location alone (no, it overwrites with empty). Use the per-piece detail
+       page if you need to update just one field.</small></p>
+</div>
+<script>
+(function () {
+    function pad(n) { return String(n).padStart(2, "0"); }
+
+    // "Now" button for the drop-off datetime: fills the visible
+    // datetime-local input AND the hidden UTC ISO field.
+    const localInput = document.getElementById("bulk-shipped-at-local");
+    const utcHidden = document.getElementById("bulk-shipped-at-utc");
+    const nowBtn = document.getElementById("bulk-shipped-at-now-btn");
+    function syncUtc() {
+        if (!localInput.value) { utcHidden.value = ""; return; }
+        const d = new Date(localInput.value);  // browser interprets as local
+        utcHidden.value = isNaN(d.getTime()) ? "" : d.toISOString();
+    }
+    if (localInput) localInput.addEventListener("change", syncUtc);
+    if (nowBtn) nowBtn.addEventListener("click", function () {
+        const d = new Date();
+        localInput.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        utcHidden.value = d.toISOString();
+    });
+
+    // Geolocation for the drop-off location.
+    const locBtn = document.getElementById("bulk-ship-locate-btn");
+    const locTxt = document.getElementById("bulk-ship-input");
+    const locLat = document.getElementById("bulk-ship-lat");
+    const locLng = document.getElementById("bulk-ship-lng");
+    const locStatus = document.getElementById("bulk-ship-status");
+    if (!locBtn || !navigator.geolocation) {
+        if (locBtn) { locBtn.disabled = true; locBtn.title = "Geolocation not available"; }
+        return;
+    }
+    locBtn.addEventListener("click", function () {
+        locStatus.textContent = "Asking the browser for your location…";
+        locStatus.style.color = "#666";
+        locBtn.disabled = true;
+        navigator.geolocation.getCurrentPosition(
+            function (pos) {
+                const la = pos.coords.latitude.toFixed(5);
+                const lo = pos.coords.longitude.toFixed(5);
+                locLat.value = la;
+                locLng.value = lo;
+                const note = `(${la}, ${lo})`;
+                if (!locTxt.value.includes(note)) {
+                    const sep = locTxt.value.trim() ? " " : "";
+                    locTxt.value = (locTxt.value + sep + note).slice(0, 200);
+                }
+                locStatus.textContent = `Got it: ${la}, ${lo} (±${Math.round(pos.coords.accuracy)} m)`;
+                locStatus.style.color = "#197b30";
+                locBtn.disabled = false;
+            },
+            function (err) {
+                locStatus.textContent = `Couldn't get location: ${err.message}`;
+                locStatus.style.color = "#b00";
+                locBtn.disabled = false;
+            },
+            {enableHighAccuracy: true, timeout: 10000, maximumAge: 60000}
+        );
+    });
+})();
+</script>
 {% endif %}
 <p><small><strong>Tip:</strong> shift-click two checkboxes to select
    (or deselect) the entire range between them. Bulk <em>Set label</em>

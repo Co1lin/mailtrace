@@ -468,7 +468,7 @@ def _build_digest(
     tz = _resolve_user_tz(user)
     total = sum(len(s) for _, s in pieces_with_new_scans)
     plural = "" if total == 1 else "s"
-    subject = f"mailtrace: {total} new scan{plural} on {len(pieces_with_new_scans)} piece(s)"
+    subject = f"MailTrace: {total} new scan{plural} on {len(pieces_with_new_scans)} piece(s)"
     lines = [f"{total} new scan{plural} across {len(pieces_with_new_scans)} piece(s):", ""]
     html_blocks = [f"<p>{total} new scan{plural} across {len(pieces_with_new_scans)} piece(s):</p>"]
     for piece, scans in pieces_with_new_scans:

@@ -1,5 +1,5 @@
 {% extends "_base.html" %}
-{% block title %}mailtrace - piece #{{ piece.id }}{% endblock %}
+{% block title %}MailTrace - piece #{{ piece.id }}{% endblock %}
 {% block body %}
 <h1>Piece #{{ piece.id }} {% if piece.label %}— {{ piece.label }}{% endif %}</h1>
 <p><a href="/pieces/">&larr; back to list</a></p>
@@ -11,36 +11,14 @@
     <h2>Identity</h2>
     <form method="POST" action="/pieces/{{ piece.id }}/label" style="margin-bottom:0.6rem">
         <label style="display:inline">Label / annotation
-            <small>(annotate later — e.g. "shipped from Alaska Mar 12")</small>
+            <small>(free-form — anything you want to remember about this piece)</small>
         </label>
         <div style="display:flex; gap:0.4rem; align-items:center">
-            <input type="text" name="label" id="piece-label-input"
-                   maxlength="80" value="{{ piece.label or '' }}"
-                   placeholder="(blank — add a note about when/where you mailed it, etc.)"
+            <input type="text" name="label" maxlength="80" value="{{ piece.label or '' }}"
+                   placeholder="(blank — anything goes; the structured drop-off record is below)"
                    style="flex:1">
-            <button type="button" class="secondary" id="piece-label-now-btn"
-                    title="Append current local timestamp (does not save)">+ Now</button>
             <button type="submit" class="secondary">Save label</button>
         </div>
-        <script>
-        // Append current browser-local YYYY-MM-DD HH:MM to the label input
-        // (not saved until Save is clicked). Truncates to the 80-char DB
-        // column. Use " · " as a separator so multiple appends stay legible.
-        (function () {
-            const input = document.getElementById("piece-label-input");
-            const btn = document.getElementById("piece-label-now-btn");
-            btn.addEventListener("click", function () {
-                const d = new Date();
-                const pad = function (n) { return String(n).padStart(2, "0"); };
-                const stamp = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-                const sep = input.value.trim() ? " · " : "";
-                input.value = (input.value + sep + stamp).slice(0, 80);
-                input.focus();
-                // Move caret to end so the user can keep typing.
-                input.setSelectionRange(input.value.length, input.value.length);
-            });
-        })();
-        </script>
     </form>
     <p><strong>Status:</strong> <span class="pill">{{ piece.status }}</span>
        {% if piece.archived_at %} <span class="pill inactive">archived</span>{% endif %}</p>
@@ -68,6 +46,133 @@
         </form>
     </p>
     {% endif %}
+
+    <div style="margin-top:0.6rem; padding-top:0.6rem; border-top:1px solid #eee">
+    {% if piece.shipped_at or piece.shipped_from %}
+    <p style="margin:0 0 0.6rem 0">
+        <strong>Drop-off:</strong>
+        {% if piece.shipped_at %}<time data-utc="{{ piece.shipped_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}" data-fmt="datetime-tz">{{ piece.shipped_at.strftime('%Y-%m-%d %H:%M UTC') }}</time>{% endif %}
+        {% if piece.shipped_at and piece.shipped_from %} · {% endif %}
+        {% if piece.shipped_from %}{{ piece.shipped_from }}{% endif %}
+        {% if piece.shipped_from_lat is not none and piece.shipped_from_lng is not none %}
+        <small>({{ '%.5f'|format(piece.shipped_from_lat) }}, {{ '%.5f'|format(piece.shipped_from_lng) }})</small>
+        {% endif %}
+    </p>
+    {% endif %}
+    <form method="POST" action="/pieces/{{ piece.id }}/shipped">
+        <label style="display:inline">Drop-off record
+            <small>(when + where you actually mailed it — for a future map of routes you've sent)</small>
+        </label>
+
+        <div style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; margin-top:0.4rem">
+            <span style="min-width:5rem">When</span>
+            <input type="datetime-local" id="ship-at-local" style="flex:0 1 16rem">
+            <input type="hidden" name="shipped_at" id="ship-at-utc"
+                   value="{{ piece.shipped_at.strftime('%Y-%m-%dT%H:%M:%SZ') if piece.shipped_at else '' }}">
+            <button type="button" class="secondary" id="ship-at-now-btn"
+                    title="Set to current local time">📅 Now</button>
+            <button type="button" class="secondary" id="ship-at-clear-btn"
+                    title="Clear the drop-off time">Clear</button>
+        </div>
+
+        <div style="display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; margin-top:0.4rem">
+            <span style="min-width:5rem">Where</span>
+            <input type="text" name="shipped_from" id="ship-from-input"
+                   maxlength="200" value="{{ piece.shipped_from or '' }}"
+                   placeholder="e.g. Anchorage Post Office, or just the auto-filled coordinates"
+                   style="flex:1; min-width:14rem">
+            <input type="hidden" name="shipped_from_lat" id="ship-from-lat"
+                   value="{{ piece.shipped_from_lat if piece.shipped_from_lat is not none else '' }}">
+            <input type="hidden" name="shipped_from_lng" id="ship-from-lng"
+                   value="{{ piece.shipped_from_lng if piece.shipped_from_lng is not none else '' }}">
+            <button type="button" class="secondary" id="ship-from-locate-btn"
+                    title="Use the browser's geolocation API (asks permission once)">📍 Use my location</button>
+        </div>
+
+        <p style="margin:0.5rem 0 0">
+            <button type="submit" class="secondary">Save drop-off</button>
+            <small id="ship-status" style="margin-left:0.5rem; color:#666">
+            {% if piece.shipped_from_lat is not none and piece.shipped_from_lng is not none %}
+                Saved coordinates: {{ '%.5f'|format(piece.shipped_from_lat) }}, {{ '%.5f'|format(piece.shipped_from_lng) }}
+            {% endif %}
+            </small>
+        </p>
+
+        <script>
+        (function () {
+            function pad(n) { return String(n).padStart(2, "0"); }
+
+            // Hydrate the visible datetime-local input from the saved UTC value
+            // (if any). Display in browser-local; submit in UTC ISO via the
+            // hidden input so the round-trip is timezone-correct regardless of
+            // user.timezone vs browser TZ.
+            const localInput = document.getElementById("ship-at-local");
+            const utcHidden = document.getElementById("ship-at-utc");
+            const nowBtn = document.getElementById("ship-at-now-btn");
+            const clearBtn = document.getElementById("ship-at-clear-btn");
+            const initialUtc = utcHidden.value;
+            if (initialUtc) {
+                const d = new Date(initialUtc);
+                if (!isNaN(d.getTime())) {
+                    localInput.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                }
+            }
+            localInput.addEventListener("change", function () {
+                if (!localInput.value) { utcHidden.value = ""; return; }
+                const d = new Date(localInput.value);
+                utcHidden.value = isNaN(d.getTime()) ? "" : d.toISOString();
+            });
+            nowBtn.addEventListener("click", function () {
+                const d = new Date();
+                localInput.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                utcHidden.value = d.toISOString();
+            });
+            clearBtn.addEventListener("click", function () {
+                localInput.value = "";
+                utcHidden.value = "";
+            });
+
+            // Geolocation for the drop-off location.
+            const locBtn = document.getElementById("ship-from-locate-btn");
+            const locTxt = document.getElementById("ship-from-input");
+            const locLat = document.getElementById("ship-from-lat");
+            const locLng = document.getElementById("ship-from-lng");
+            const status = document.getElementById("ship-status");
+            if (!locBtn || !navigator.geolocation) {
+                if (locBtn) { locBtn.disabled = true; locBtn.title = "Geolocation not available"; }
+                return;
+            }
+            locBtn.addEventListener("click", function () {
+                status.textContent = "Asking the browser for your location…";
+                status.style.color = "#666";
+                locBtn.disabled = true;
+                navigator.geolocation.getCurrentPosition(
+                    function (pos) {
+                        const la = pos.coords.latitude.toFixed(5);
+                        const lo = pos.coords.longitude.toFixed(5);
+                        locLat.value = la;
+                        locLng.value = lo;
+                        const note = `(${la}, ${lo})`;
+                        if (!locTxt.value.includes(note)) {
+                            const sep = locTxt.value.trim() ? " " : "";
+                            locTxt.value = (locTxt.value + sep + note).slice(0, 200);
+                        }
+                        status.textContent = `Got it: ${la}, ${lo} (±${Math.round(pos.coords.accuracy)} m). Click Save drop-off to persist.`;
+                        status.style.color = "#197b30";
+                        locBtn.disabled = false;
+                    },
+                    function (err) {
+                        status.textContent = `Couldn't get location: ${err.message}`;
+                        status.style.color = "#b00";
+                        locBtn.disabled = false;
+                    },
+                    {enableHighAccuracy: true, timeout: 10000, maximumAge: 60000}
+                );
+            });
+        })();
+        </script>
+    </form>
+    </div>
 </div>
 
 <div class="card">

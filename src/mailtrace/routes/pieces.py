@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import io
 from typing import Annotated, Any
 
@@ -726,6 +727,71 @@ async def piece_set_label(
     return RedirectResponse(f"/pieces/{piece.id}", status_code=303)
 
 
+def _parse_optional_float(value: str, *, lo: float, hi: float) -> float | None:
+    """Parse a form field as a float in [lo, hi] or return None if blank
+    or invalid. Used for lat/lng inputs where blank means 'unknown'."""
+    s = value.strip()
+    if not s:
+        return None
+    try:
+        f = float(s)
+    except ValueError:
+        return None
+    if not (lo <= f <= hi):
+        return None
+    return f
+
+
+def _parse_optional_utc_datetime(value: str) -> dt.datetime | None:
+    """Parse a UTC ISO-8601 datetime string from a form field. The
+    detail-page JS submits `Date.prototype.toISOString()` output (always
+    ends in 'Z'); this helper normalizes to a tz-aware UTC datetime.
+    Returns None for blank or unparseable input — drop-off time is opt-in."""
+    s = value.strip()
+    if not s:
+        return None
+    # Tolerate the bare "Z" suffix and the explicit "+00:00" form.
+    s_norm = s.replace("Z", "+00:00") if s.endswith("Z") else s
+    try:
+        parsed = dt.datetime.fromisoformat(s_norm)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        # Treat naive input as UTC (defensive — JS always sends UTC,
+        # but a curl user might post a naive string).
+        parsed = parsed.replace(tzinfo=dt.UTC)
+    return parsed.astimezone(dt.UTC)
+
+
+@router.post("/{piece_id}/shipped")
+async def piece_set_shipped(
+    piece_id: int,
+    db: SessionDep,
+    user: CurrentUserDep,
+    request: Request,
+    shipped_at: Annotated[str, Form()] = "",
+    shipped_from: Annotated[str, Form()] = "",
+    shipped_from_lat: Annotated[str, Form()] = "",
+    shipped_from_lng: Annotated[str, Form()] = "",
+) -> Response:
+    """Record the drop-off — when AND where the user actually mailed this
+    piece. All four inputs are optional and independent; empty values
+    clear that field. Out-of-range or non-numeric lat/lng values are
+    silently dropped (treated as 'no coordinates'); the text and
+    timestamp still update.
+
+    `shipped_at` is expected as a UTC ISO-8601 string (the form's JS
+    converts the visible datetime-local input to UTC before submission)."""
+    piece = await _load_owned(db, user.id, piece_id)
+    piece.shipped_at = _parse_optional_utc_datetime(shipped_at)
+    piece.shipped_from = shipped_from.strip()[:200]
+    piece.shipped_from_lat = _parse_optional_float(shipped_from_lat, lo=-90.0, hi=90.0)
+    piece.shipped_from_lng = _parse_optional_float(shipped_from_lng, lo=-180.0, hi=180.0)
+    await db.commit()
+    request.session["piece_flash"] = "Drop-off record updated."
+    return RedirectResponse(f"/pieces/{piece.id}", status_code=303)
+
+
 def _archive_in_place(piece: MailPiece) -> None:
     if piece.archived_at is not None:
         return
@@ -825,6 +891,24 @@ async def bulk_action(
         new_label = str(form.get("label", "") or "").strip()[:80]
         for p in pieces:
             p.label = new_label
+    elif action == "set_shipped":
+        # Apply the SAME drop-off record (when + where) to every selected
+        # piece. Empty fields clear that part on each piece — there's no
+        # "leave existing" mode; users who want partial updates should use
+        # the per-piece form.
+        new_at = _parse_optional_utc_datetime(str(form.get("shipped_at", "") or ""))
+        new_text = str(form.get("shipped_from", "") or "").strip()[:200]
+        new_lat = _parse_optional_float(
+            str(form.get("shipped_from_lat", "") or ""), lo=-90.0, hi=90.0
+        )
+        new_lng = _parse_optional_float(
+            str(form.get("shipped_from_lng", "") or ""), lo=-180.0, hi=180.0
+        )
+        for p in pieces:
+            p.shipped_at = new_at
+            p.shipped_from = new_text
+            p.shipped_from_lat = new_lat
+            p.shipped_from_lng = new_lng
     elif action == "delete":
         for p in pieces:
             await db.delete(p)

@@ -1,8 +1,8 @@
 {% extends "_base.html" %}
-{% block title %}mailtrace - setup &amp; account{% endblock %}
+{% block title %}MailTrace - setup &amp; account{% endblock %}
 {% block body %}
 <h1>Setup &amp; Account</h1>
-<p class="lede">Configure your tenant on this mailtrace instance. Each
+<p class="lede">Configure your tenant on this MailTrace instance. Each
    user brings their own USPS app keys and (optionally) BCG account, so
    USPS quota / rate-limits / data attribution are scoped to you, not
    shared with other users on this platform.</p>
@@ -75,7 +75,7 @@
            you're paying for, or your mail can be routed wrong.
         </p>
         <p class="lede"><small>For homelab / occasional personal use: just leave
-           both at the defaults. mailtrace was designed around BI=0 / STID=40
+           both at the defaults. MailTrace was designed around BI=0 / STID=40
            and that's what the upstream <code>1997cui/envelope</code> deployment
            runs as well.</small></p>
 
@@ -102,7 +102,7 @@
         <ol>
             <li>You need a BCG account first — <a href="https://gateway.usps.com/" target="_blank" rel="noopener">gateway.usps.com</a>, sign up for a Business Account.</li>
             <li>Go to <a href="https://developer.usps.com/" target="_blank" rel="noopener">developer.usps.com</a> and click <strong>Get Started</strong>; follow the prompts. You'll end up on the USPS Customer Onboarding Portal at <a href="https://cop.usps.com/" target="_blank" rel="noopener">cop.usps.com</a>, signed in with your BCG account.</li>
-            <li>In cop.usps.com look for the small <strong>My Apps</strong> button in the top-right corner. Click it and create a new app (any name — e.g. "mailtrace").</li>
+            <li>In cop.usps.com look for the small <strong>My Apps</strong> button in the top-right corner. Click it and create a new app (any name — e.g. "MailTrace").</li>
             <li>Once the app is created, its detail page shows a <strong>Consumer Key</strong> and <strong>Consumer Secret</strong>. Copy both.</li>
             <li>Paste the Consumer Key into <em>Client ID</em> below and the Consumer Secret into <em>Client Secret</em>, then <strong>Save all sections</strong> at the bottom of this page.</li>
             <li>Click <strong>Test USPS API</strong> in the "Test your setup" section to verify. (USPS' edge can take ~10 min to propagate after app creation; if the first test fails with a 401, wait a bit and retry.)</li>
