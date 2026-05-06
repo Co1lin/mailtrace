@@ -56,16 +56,40 @@
     <input type="text" value="{{ user.email }}" disabled>
     <label>Mailer ID</label>
     <input type="text" name="mailer_id" pattern="\d*" value="{{ user.mailer_id or '' }}" placeholder="e.g. 123456 or 900000001">
-    <div class="row">
-        <div>
-            <label>Barcode ID (0–99)</label>
-            <input type="number" name="barcode_id" min="0" max="99" value="{{ user.barcode_id }}">
+
+    <details>
+        <summary><small>Advanced: Barcode ID and Service Type ID — leave at the defaults unless you know you need to change them</small></summary>
+        <p class="lede"><strong>Barcode ID (BI)</strong> is a 2-digit code that
+           groups a sender's mailings on the USPS side. For personal /
+           single-mailer use the default <strong>0</strong> is correct —
+           change this only if USPS issued you multiple BIs and you want to
+           tag pieces against a specific one (e.g. to separate billing).
+        </p>
+        <p class="lede"><strong>Service Type ID (STID)</strong> is a 3-digit code that
+           tells USPS what mail class + tracking services the piece is for.
+           The default <strong>40</strong> is "First-Class Mail, IMb tracking
+           with IV-MTR" — the right value for postcards / letters dropped in
+           a regular mailbox. Other classes (Marketing Mail, Periodicals,
+           certified, return-receipt, …) have different STIDs from USPS's
+           STID table; don't guess — look up the value for the exact service
+           you're paying for, or your mail can be routed wrong.
+        </p>
+        <p class="lede"><small>For homelab / occasional personal use: just leave
+           both at the defaults. mailtrace was designed around BI=0 / STID=40
+           and that's what the upstream <code>1997cui/envelope</code> deployment
+           runs as well.</small></p>
+
+        <div class="row">
+            <div>
+                <label>Barcode ID (0–99) <small>· default 0</small></label>
+                <input type="number" name="barcode_id" min="0" max="99" value="{{ user.barcode_id }}">
+            </div>
+            <div>
+                <label>Service Type ID (0–999) <small>· default 40 = FCM + IMb tracking</small></label>
+                <input type="number" name="service_type_id" min="0" max="999" value="{{ user.service_type_id }}">
+            </div>
         </div>
-        <div>
-            <label>Service Type ID (0–999)</label>
-            <input type="number" name="service_type_id" min="0" max="999" value="{{ user.service_type_id }}">
-        </div>
-    </div>
+    </details>
 </div>
 
 <div class="card">
