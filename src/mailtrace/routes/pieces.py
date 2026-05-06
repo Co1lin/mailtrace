@@ -106,8 +106,13 @@ async def list_pieces(
     if status_filter and status_filter not in _LIST_STATUS_FILTERS:
         raise HTTPException(status_code=400, detail=f"unknown status filter: {status_filter!r}")
 
+    # id desc as a tiebreaker: batch-creates land in the same created_at
+    # second, and we want the latest-inserted piece on top of its siblings,
+    # not the first one (which is what the DB returns by insertion order).
     stmt = (
-        select(MailPiece).where(MailPiece.user_id == user.id).order_by(MailPiece.created_at.desc())
+        select(MailPiece)
+        .where(MailPiece.user_id == user.id)
+        .order_by(MailPiece.created_at.desc(), MailPiece.id.desc())
     )
     if show_archived:
         stmt = stmt.where(MailPiece.archived_at.is_not(None))
@@ -833,7 +838,7 @@ async def sheet_setup(request: Request, db: SessionDep, user: CurrentUserDep) ->
             await db.execute(
                 select(MailPiece)
                 .where(MailPiece.user_id == user.id, MailPiece.archived_at.is_(None))
-                .order_by(MailPiece.created_at.desc())
+                .order_by(MailPiece.created_at.desc(), MailPiece.id.desc())
             )
         )
         .scalars()

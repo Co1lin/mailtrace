@@ -49,7 +49,7 @@ async def index(
             await db.execute(
                 select(MailPiece)
                 .where(MailPiece.user_id == user.id, MailPiece.archived_at.is_(None))
-                .order_by(MailPiece.created_at.desc())
+                .order_by(MailPiece.created_at.desc(), MailPiece.id.desc())
                 .limit(8)
             )
         )

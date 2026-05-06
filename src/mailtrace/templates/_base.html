@@ -34,21 +34,30 @@
         .row > * { flex: 1; }
         a { color: #1f6feb; }
         small { color: #666; }
-        /* Tables: wrap a horizontal scroller around the table itself so a
-           too-wide row scrolls inside the card instead of pushing the
-           layout. Plus break long tokens (paths, error messages, IMbs)
-           inside cells so the column doesn't stretch unbounded. */
+        /* Tables. The card itself scrolls horizontally if a row genuinely
+           can't fit (preferred over ugly mid-word wrapping). Wrap-anywhere
+           is OPT-IN per cell-content type — applied only to <code>, .err,
+           and explicit .wrap-anywhere — because applying it to every td
+           shreds short labels like "test-leo-0" mid-word and stacks dates
+           like "2026-05-06 03:17" onto two lines.
+
+           Whitespace-nowrap on .pill / time / .nowrap keeps short atomic
+           tokens (status pills, timestamps) on one line even when a
+           sibling cell has long content forcing the row taller. */
         .card { overflow-x: auto; }
         table { border-collapse: collapse; width: 100%; table-layout: auto; }
         th, td {
             border: 1px solid #ddd; padding: 0.4rem 0.5rem; text-align: left;
             font-size: 0.9rem; vertical-align: top;
-            overflow-wrap: anywhere; word-break: break-word;
         }
         th { background: #f5f5f5; }
+        td .wrap-anywhere, td code, td .err {
+            overflow-wrap: anywhere; word-break: break-word;
+        }
+        td time, td .pill, td .nowrap { white-space: nowrap; }
         .err { color: #b00; }
         .ok { color: #197b30; }
-        .pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; background: #eee; font-size: 0.8rem; }
+        .pill { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; background: #eee; font-size: 0.8rem; white-space: nowrap; }
         .pill.admin { background: #ffe4b5; }
         .pill.inactive { background: #f5b7b1; }
         .flash { padding: 0.75rem; border-radius: 6px; background: #fff5d6; border: 1px solid #f0c36d; margin: 1rem 0; }
