@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!--
+    mailtrace favicon: a #10 envelope with an IMb-style barcode strip
+    along its bottom edge. Single-color so it works on light and dark
+    browser-tab themes; SVG so it stays crisp at every retina size.
+
+    The IMb barcode is the distinctive part — real Intelligent Mail
+    Barcodes use exactly four bar shapes (Full, Ascender, Descender,
+    Tracker). The bar pattern below mixes all four for visual rhythm,
+    not for any particular encoded value.
+  -->
+  <g fill="none" stroke="#1a2540" stroke-width="3" stroke-linejoin="round">
+    <!-- envelope body -->
+    <rect x="6" y="14" width="52" height="36" rx="3"/>
+    <!-- flap V (slightly inset from the top edge so the body line shows) -->
+    <path d="M 6 17 L 32 36 L 58 17"/>
+  </g>
+
+  <!-- IMb barcode strip. Bars are 2px wide, 3.5px pitch.
+       Full   = top to bottom (y=42..50, h=8)
+       Asc.   = top half       (y=42..46, h=4)
+       Desc.  = bottom half    (y=46..50, h=4)
+       Tracker= middle only    (y=45..47, h=2) -->
+  <g fill="#1a2540">
+    <rect x="12"   y="42" width="2" height="8"/>  <!-- F -->
+    <rect x="15.5" y="42" width="2" height="4"/>  <!-- A -->
+    <rect x="19"   y="46" width="2" height="4"/>  <!-- D -->
+    <rect x="22.5" y="45" width="2" height="2"/>  <!-- T -->
+    <rect x="26"   y="42" width="2" height="8"/>  <!-- F -->
+    <rect x="29.5" y="46" width="2" height="4"/>  <!-- D -->
+    <rect x="33"   y="42" width="2" height="4"/>  <!-- A -->
+    <rect x="36.5" y="42" width="2" height="8"/>  <!-- F -->
+    <rect x="40"   y="45" width="2" height="2"/>  <!-- T -->
+    <rect x="43.5" y="42" width="2" height="4"/>  <!-- A -->
+    <rect x="47"   y="46" width="2" height="4"/>  <!-- D -->
+    <rect x="50.5" y="42" width="2" height="8"/>  <!-- F -->
+  </g>
+</svg>

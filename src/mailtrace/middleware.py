@@ -31,6 +31,7 @@ _PUBLIC_PREFIXES = (
     "/auth/login",
     "/auth/logout",  # idempotent; clearing a missing session is a no-op
     "/static",
+    "/favicon.ico",  # browsers fetch this unconditionally; redirect to SVG
     "/healthz",
     "/usps_feed",  # has its own HTTP Basic Auth check
     "/docs",

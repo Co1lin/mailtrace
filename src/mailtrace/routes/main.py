@@ -6,7 +6,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 
 from ..auth import CurrentUserDep
@@ -62,6 +62,13 @@ async def index(
         {"user": user, "recent_pieces": recent},
     )
     return response
+
+
+@router.get("/favicon.ico", include_in_schema=False)
+async def favicon_redirect() -> RedirectResponse:
+    """Browsers request /favicon.ico unconditionally on first visit. Redirect
+    to the actual SVG so we don't 404 (or worse, get bounced through auth)."""
+    return RedirectResponse("/static/favicon.svg", status_code=301)
 
 
 @router.get("/healthz")

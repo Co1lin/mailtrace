@@ -135,6 +135,22 @@ async def test_root_redirects_to_login_when_anonymous(anon_client: AsyncClient) 
     assert "/auth/login" in resp.headers["location"]
 
 
+async def test_favicon_ico_redirects_to_svg_without_auth(anon_client: AsyncClient) -> None:
+    """Browsers fetch /favicon.ico unconditionally on first visit. The
+    auth middleware must NOT bounce that request through /auth/login,
+    and the redirect to the actual SVG must work without a session."""
+    resp = await anon_client.get("/favicon.ico", follow_redirects=False)
+    assert resp.status_code == 301
+    assert resp.headers["location"] == "/static/favicon.svg"
+
+
+async def test_favicon_svg_serves_unauthenticated(anon_client: AsyncClient) -> None:
+    resp = await anon_client.get("/static/favicon.svg")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/svg")
+    assert b"<svg" in resp.content
+
+
 async def test_login_form_renders(anon_client: AsyncClient) -> None:
     resp = await anon_client.get("/auth/login")
     assert resp.status_code == 200
