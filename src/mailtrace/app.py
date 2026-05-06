@@ -13,13 +13,13 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from starlette.middleware.sessions import SessionMiddleware
@@ -48,18 +48,22 @@ def imb_font_data_uri() -> str:
 
 
 def _ensure_sqlite_dir(database_url: str) -> None:
-    """For sqlite URLs, create the parent directory of the DB file."""
+    """For sqlite URLs, create the parent directory of the DB file.
+
+    Uses SQLAlchemy's own URL parser instead of stdlib urlparse: the
+    SQLAlchemy 4-slash absolute form (`sqlite+aiosqlite:////data/x.db`)
+    means database=`/data/x.db`, but `urlparse(...).path.lstrip("/")`
+    silently turns it into the relative `data/x.db` and writes into
+    the WORKDIR — which is read-only for the non-root container user.
+    """
     if not database_url.startswith("sqlite"):
         return
-    # urls look like sqlite+aiosqlite:///./data/mailtrace.db or .../absolute/path.db
-    parsed = urlparse(database_url)
-    # path is "/./data/mailtrace.db" — strip leading slash for relative paths
-    path = parsed.path.lstrip("/")
-    if not path or path == ":memory:":
+    db = make_url(database_url).database
+    if not db or db == ":memory:":
         return
-    db_path = Path(path)
-    if db_path.parent and not db_path.parent.exists():
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+    parent = Path(db).parent
+    if not parent.exists():
+        parent.mkdir(parents=True, exist_ok=True)
 
 
 async def init_db(engine: AsyncEngine) -> None:

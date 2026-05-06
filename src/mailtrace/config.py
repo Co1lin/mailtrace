@@ -35,10 +35,16 @@ class Settings(BaseSettings):
     # value that genuinely must come from env.
     session_secret: SecretStr = SecretStr("change-me")
 
-    # Persistent storage. SQLite by default; swap the URL to point at a
-    # mounted volume in production. Use sqlite+aiosqlite for the async
-    # driver. For Postgres: postgresql+asyncpg://...
-    database_url: str = "sqlite+aiosqlite:///./data/mailtrace.db"
+    # Persistent storage. SQLite by default at the absolute path /data,
+    # which is where docker-compose.yml mounts the named volume and where
+    # the Dockerfile chowns to uid 10001. Use sqlite+aiosqlite for the
+    # async driver. For Postgres: postgresql+asyncpg://...
+    #
+    # Format note: SQLAlchemy distinguishes 3-slash (relative) from
+    # 4-slash (absolute) sqlite URLs. The 4-slash form below points at
+    # /data/mailtrace.db; a 3-slash form would resolve relative to the
+    # container's WORKDIR (/app), which is not where the volume mounts.
+    database_url: str = "sqlite+aiosqlite:////data/mailtrace.db"
 
     # Redis
     redis_url: str = "redis://redis:6379/0"
