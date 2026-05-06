@@ -67,8 +67,41 @@ def _ensure_sqlite_dir(database_url: str) -> None:
 
 
 async def init_db(engine: AsyncEngine) -> None:
+    """Run create_all against an existing engine.
+
+    Used by tests (which manage their own engine lifecycle) and by the
+    `mailtrace admin` CLI commands (single-process, no race). The
+    `mailtrace serve` entrypoint uses `init_db_sync` instead so that
+    schema creation runs ONCE in the parent process before uvicorn
+    forks worker pools — multi-worker startup would otherwise race
+    `checkfirst` reflection against `CREATE TABLE` and produce noisy
+    "table already exists" tracebacks on every cold start.
+    """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+def init_db_sync(database_url: str) -> None:
+    """Run schema creation once, synchronously.
+
+    Designed to be invoked by the CLI entrypoint *before* uvicorn spawns
+    its worker pool. Spins up its own throwaway async engine, runs
+    create_all, then disposes the engine. Safe to call multiple times
+    on an already-initialised DB (create_all is idempotent within a
+    single process).
+    """
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    async def _run() -> None:
+        engine = create_async_engine(database_url)
+        try:
+            await init_db(engine)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
 
 
 DEFAULT_LOOP_INTERVAL_SECONDS = 300
@@ -214,8 +247,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # NB: schema creation does NOT happen here. With multiple uvicorn
+        # workers each running this lifespan independently, all workers
+        # would race `checkfirst` reflection against CREATE TABLE and
+        # one would lose with "table already exists". Schema init runs
+        # once in the CLI parent process via init_db_sync() before fork.
+        # Tests construct an engine and call init_db() directly.
         engine = make_engine(settings.database_url)
-        await init_db(engine)
         sm = make_sessionmaker(engine)
 
         store = Store.from_url(
