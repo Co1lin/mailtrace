@@ -72,15 +72,23 @@ class LabelStyle:
     padding_in: float
 
 
+# IMb size MUST satisfy USPS-STD-39: 65 bars at 20-24 bars/inch, total
+# outside-to-outside length 2.683"-3.225". Empirically with this TTF,
+# imb_pt * 0.179" = rendered length:
+#   17pt → 3.04"  (comfortable middle of spec)
+#   16pt → 2.87"  (within spec, lower edge)
+#   14pt → 2.51"  (BELOW MIN — sub-spec, AFCS scanners may reject)
+# 17pt across all three so the IMb is always scannable; the 5161 (1"
+# tall) needs the address font shrunk to make room.
 _STYLES: dict[str, LabelStyle] = {
     "5163": LabelStyle(
-        imb_pt=16, human_readable_pt=9, address_pt=11, address_line_pt=13, padding_in=0.1
+        imb_pt=17, human_readable_pt=9, address_pt=11, address_line_pt=13, padding_in=0.1
     ),
     "5162": LabelStyle(
-        imb_pt=16, human_readable_pt=8, address_pt=10, address_line_pt=11.5, padding_in=0.08
+        imb_pt=17, human_readable_pt=8, address_pt=10, address_line_pt=11.5, padding_in=0.08
     ),
     "5161": LabelStyle(
-        imb_pt=14, human_readable_pt=0, address_pt=8.5, address_line_pt=10, padding_in=0.06
+        imb_pt=17, human_readable_pt=0, address_pt=8, address_line_pt=9, padding_in=0.05
     ),
 }
 _DEFAULT_STYLE = _STYLES["5163"]
@@ -114,6 +122,12 @@ class _Piece(Protocol):
 _ALIGNMENTS = ("left", "center")
 
 
+def _normalize_alignment(alignment: str) -> str:
+    if alignment not in _ALIGNMENTS:
+        return "left"
+    return alignment
+
+
 def _spec_for_layout(layout: dict[str, Any]) -> labels.Specification:
     """Convert a mailtrace AVERY_LAYOUTS entry (in inches) into the
     labels library's Specification (in mm)."""
@@ -131,33 +145,38 @@ def _spec_for_layout(layout: dict[str, Any]) -> labels.Specification:
     )
 
 
-def _normalize_alignment(alignment: str) -> str:
-    if alignment not in _ALIGNMENTS:
-        return "left"
-    return alignment
-
-
 def render_label_sheet(
     *,
     layout: dict[str, Any],
     pieces: Sequence[_Piece],
     start_row: int = 1,
     start_col: int = 1,
-    alignment: str = "left",
+    block_align: str = "left",
+    text_align: str = "left",
 ) -> bytes:
     """Render `pieces` onto an Avery sheet matching `layout`.
 
     Cells before (start_row, start_col) on page 1 are marked as
     already-used and skipped. Page 2+ always start at (1, 1).
-    `alignment`: "left" (default) or "center" — horizontal alignment
-    of IMb + address content within each label.
+
+    `block_align`: where the content block sits horizontally on each
+        label. "left" anchors the block at the left padding; "center"
+        anchors the block such that the widest line is centered on
+        the label's horizontal midpoint.
+
+    `text_align`: how individual lines are justified within the block.
+        "left" left-aligns each line to a common left edge; "center"
+        centers each line independently. Independent of block_align —
+        e.g. block=center + text=left gives a centered address block
+        with left-justified lines (the natural address layout).
     """
-    align = _normalize_alignment(alignment)
+    block = _normalize_alignment(block_align)
+    text = _normalize_alignment(text_align)
     style = _STYLES.get(layout["model"], _DEFAULT_STYLE)
     spec = _spec_for_layout(layout)
 
-    def draw_one(label: shapes.Group, width_mm: float, height_mm: float, piece: _Piece) -> None:
-        _draw_piece(label, width_mm, height_mm, piece, style, align)
+    def draw_one(label: shapes.Group, width_pt: float, height_pt: float, piece: _Piece) -> None:
+        _draw_piece(label, width_pt, height_pt, piece, style, block, text)
 
     sheet = labels.Sheet(spec, draw_one, border=False)
 
@@ -185,7 +204,8 @@ def render_single_label(
     piece: _Piece,
     row: int = 1,
     col: int = 1,
-    alignment: str = "left",
+    block_align: str = "left",
+    text_align: str = "left",
 ) -> bytes:
     """Render one piece into a single cell of an otherwise-empty sheet."""
     return render_label_sheet(
@@ -193,7 +213,8 @@ def render_single_label(
         pieces=[piece],
         start_row=row,
         start_col=col,
-        alignment=alignment,
+        block_align=block_align,
+        text_align=text_align,
     )
 
 
@@ -203,27 +224,60 @@ def _draw_piece(
     height_pt: float,
     piece: _Piece,
     style: LabelStyle,
-    alignment: str,
+    block_align: str,
+    text_align: str,
 ) -> None:
     """Draw IMb + human-readable + recipient block on one label cell.
 
-    Uses real font metrics (ascent/descent from the TTF) instead of
-    guessing — the IMb font is special: at 16pt it has ascent=+8pt and
-    descent=-8pt (the bars span the full em-square), so a naive 1.0x
-    fontSize line height stacks the next line on top of the bars.
+    Two independent axes:
+      block_align: where the bounding box of all content sits horizontally
+          on the label (left or center).
+      text_align: how each line is justified within the block (left or
+          center). Independent of block_align — e.g. block=center +
+          text=left renders a centered block of left-justified address
+          lines, the natural form for a mailing label.
 
-    NB: width_pt and height_pt are in REPORTLAB POINTS (1/72 in), even
+    Uses real font metrics (ascent/descent from the TTF). The IMb font
+    is special: at 16pt it has ascent=+8pt and descent=-8pt (the bars
+    span the full em-square), so a naive 1.0x line height stacks the
+    next line on top of the bars.
+
+    NB: width_pt and height_pt are REPORTLAB POINTS (1/72 in), even
     though we declared the labels.Specification in mm — the labels lib
     converts to pts before invoking this callback.
     """
     pad_pt = style.padding_in * _PT_PER_IN
 
-    if alignment == "center":
-        x_anchor = width_pt / 2
-        text_anchor = "middle"
+    # Pre-compute every line we'll draw with its font+size, so we can
+    # find the widest line (= block bounding-box width) before rendering.
+    address_lines = [ln for ln in piece.recipient_block.split("\n") if ln.strip()]
+    rendered_lines: list[tuple[str, str, float]] = [
+        (piece.imb_letters, IMB_FONT, float(style.imb_pt)),
+    ]
+    if style.human_readable_pt > 0:
+        rendered_lines.append(
+            (piece.human_readable_imb(), "Helvetica", float(style.human_readable_pt))
+        )
+    for ln in address_lines:
+        rendered_lines.append((ln, ADDRESS_FONT, float(style.address_pt)))
+    line_widths = [pdfmetrics.stringWidth(t, f, p) for (t, f, p) in rendered_lines]
+    block_width = max(line_widths) if line_widths else 0.0
+
+    # Block left edge: where the bounding box starts on the label.
+    if block_align == "center":
+        block_left = (width_pt - block_width) / 2
     else:
-        x_anchor = pad_pt
-        text_anchor = "start"
+        block_left = pad_pt
+
+    # Per-line anchor: text_align decides whether each line grows from
+    # the block's left edge (textAnchor="start") or centers itself
+    # around the block's horizontal midpoint (textAnchor="middle").
+    if text_align == "center":
+        x_anchor = block_left + block_width / 2
+        text_anchor_attr = "middle"
+    else:
+        x_anchor = block_left
+        text_anchor_attr = "start"
 
     # Cursor: y-coordinate (pts) of the TOP edge of the next text line.
     cur_top = [height_pt - pad_pt]  # boxed for closure
@@ -239,28 +293,26 @@ def _draw_piece(
                 text,
                 fontName=font,
                 fontSize=pt,
-                textAnchor=text_anchor,
+                textAnchor=text_anchor_attr,
             )
         )
         cur_top[0] -= ascent + descent + gap_after_pt
 
     # IMb barcode (extra gap after — it has tall descender bars).
-    draw_line(piece.imb_letters, IMB_FONT, style.imb_pt, gap_after_pt=2.0)
+    draw_line(piece.imb_letters, IMB_FONT, float(style.imb_pt), gap_after_pt=2.0)
 
     if style.human_readable_pt > 0:
         draw_line(
             piece.human_readable_imb(),
             "Helvetica",
-            style.human_readable_pt,
+            float(style.human_readable_pt),
             gap_after_pt=3.0,  # section break before address block
         )
     else:
         cur_top[0] -= 3.0  # pts of breathing room before address when no h/r
 
-    for line in piece.recipient_block.split("\n"):
-        if not line.strip():
-            continue
-        draw_line(line, ADDRESS_FONT, style.address_pt, gap_after_pt=1.0)
+    for line in address_lines:
+        draw_line(line, ADDRESS_FONT, float(style.address_pt), gap_after_pt=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -268,16 +320,27 @@ def _draw_piece(
 # ---------------------------------------------------------------------------
 
 
-def render_envelope(piece: _Piece, *, alignment: str = "left") -> bytes:
+def render_envelope(
+    piece: _Piece,
+    *,
+    block_align: str = "left",
+    text_align: str = "left",
+) -> bytes:
     """Render a #10 business envelope: sender top-left, recipient block
     center-right, IMb directly above the recipient block.
 
     USPS placement: the IMb sits in the OCR clear zone above the
     delivery address line, with the address block in the lower-right
-    quadrant where AFCS scanners look. The address block is left-aligned
-    by default (most common); pass alignment="center" to center it.
+    quadrant where AFCS scanners look.
+
+    `block_align`: position of the recipient block — "left" anchors it
+        at x=4", "center" centers it within the right half of the
+        envelope. `text_align`: how each line within the block is
+        justified (left or center). Bumped to a USPS-compliant 17pt IMb.
     """
-    align = _normalize_alignment(alignment)
+    block = _normalize_alignment(block_align)
+    text = _normalize_alignment(text_align)
+
     out = io.BytesIO()
     page_w = 9.5 * inch
     page_h = 4.125 * inch
@@ -293,33 +356,43 @@ def render_envelope(piece: _Piece, *, alignment: str = "left") -> bytes:
             c.drawString(sx, sy, line)
             sy -= 12
 
-    # Recipient block + IMb: lower-right region. We anchor the IMb at a
-    # fixed position and cascade downward.
-    recip_x = 4.0 * inch
-    recip_top_y = 2.6 * inch  # IMb baseline
+    # Recipient block: width = max line width across IMb / human-readable
+    # / address lines (so block_align=center can position the bounding
+    # box correctly).
+    addr_lines = [ln for ln in (piece.recipient_block or "").split("\n") if ln.strip()]
+    imb_pt = 17  # USPS-compliant IMb size on envelope
+    hr_pt = 9
+    addr_pt = 12
+    line_w = [
+        pdfmetrics.stringWidth(piece.imb_letters, IMB_FONT, imb_pt),
+        pdfmetrics.stringWidth(piece.human_readable_imb(), "Helvetica", hr_pt),
+        *(pdfmetrics.stringWidth(ln, ADDRESS_FONT, addr_pt) for ln in addr_lines),
+    ]
+    block_width = max(line_w) if line_w else 0.0
 
-    c.setFont(IMB_FONT, 16)
-    if align == "center":
-        c.drawCentredString((page_w + recip_x) / 2, recip_top_y, piece.imb_letters)
+    # Right-half region: x in [4 in, page_w - 0.25 in margin] center.
+    right_zone_left = 4.0 * inch
+    right_zone_right = page_w - 0.25 * inch
+    if block == "center":
+        block_left_x = (right_zone_left + right_zone_right - block_width) / 2
     else:
-        c.drawString(recip_x, recip_top_y, piece.imb_letters)
+        block_left_x = right_zone_left
+    line_anchor_x = block_left_x + block_width / 2 if text == "center" else block_left_x
 
-    cur_y = recip_top_y - 14
-    c.setFont("Helvetica", 9)
-    if align == "center":
-        c.drawCentredString((page_w + recip_x) / 2, cur_y, piece.human_readable_imb())
-    else:
-        c.drawString(recip_x, cur_y, piece.human_readable_imb())
-    cur_y -= 18
-
-    c.setFont(ADDRESS_FONT, 12)
-    for line in (piece.recipient_block or "").split("\n"):
-        if not line.strip():
-            continue
-        if align == "center":
-            c.drawCentredString((page_w + recip_x) / 2, cur_y, line)
+    def draw(font: str, pt: float, text_str: str, y: float) -> None:
+        c.setFont(font, pt)
+        if text == "center":
+            c.drawCentredString(line_anchor_x, y, text_str)
         else:
-            c.drawString(recip_x, cur_y, line)
+            c.drawString(line_anchor_x, y, text_str)
+
+    cur_y = 2.6 * inch  # IMb baseline
+    draw(IMB_FONT, imb_pt, piece.imb_letters, cur_y)
+    cur_y -= 14
+    draw("Helvetica", hr_pt, piece.human_readable_imb(), cur_y)
+    cur_y -= 18
+    for line in addr_lines:
+        draw(ADDRESS_FONT, addr_pt, line, cur_y)
         cur_y -= 14
 
     c.showPage()

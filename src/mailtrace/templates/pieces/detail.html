@@ -9,6 +9,17 @@
 
 <div class="card">
     <h2>Identity</h2>
+    <form method="POST" action="/pieces/{{ piece.id }}/label" style="margin-bottom:0.6rem">
+        <label style="display:inline">Label / annotation
+            <small>(annotate later — e.g. "shipped from Alaska Mar 12")</small>
+        </label>
+        <div style="display:flex; gap:0.4rem; align-items:center">
+            <input type="text" name="label" maxlength="80" value="{{ piece.label or '' }}"
+                   placeholder="(blank — add a note about when/where you mailed it, etc.)"
+                   style="flex:1">
+            <button type="submit" class="secondary">Save label</button>
+        </div>
+    </form>
     <p><strong>Status:</strong> <span class="pill">{{ piece.status }}</span>
        {% if piece.archived_at %} <span class="pill inactive">archived</span>{% endif %}</p>
     <p><strong>IMb:</strong> <code>{{ piece.human_readable_imb() }}</code></p>
@@ -49,34 +60,6 @@
             <pre style="white-space:pre-wrap;font-family:inherit">{{ piece.recipient_block }}</pre>
         </div>
     </div>
-</div>
-
-<div class="card">
-    <h2>Print</h2>
-    <p>
-        <a href="/pieces/{{ piece.id }}/download/envelope.pdf">Envelope PDF (download)</a>
-        &middot;
-        <a href="/pieces/{{ piece.id }}/download/envelope.pdf?inline=1" target="_blank" rel="noopener">Preview in new tab</a>
-    </p>
-    <p><small>Or print this single piece onto a partial Avery sheet:</small></p>
-    <form action="/pieces/{{ piece.id }}/download/avery.pdf" method="get">
-        <div class="row">
-            <div><label>Avery row</label><input type="number" name="row" min="1" max="10" value="1"></div>
-            <div><label>Avery col</label><input type="number" name="col" min="1" max="2" value="1"></div>
-            <div>
-                <label>Sheet</label>
-                <select name="layout">
-                    <option value="5163" selected>5163 — 4″×2″ (10/sheet)</option>
-                    <option value="5162">5162 — 4″×1⅓″ (14/sheet)</option>
-                    <option value="5161">5161 — 4″×1″ (20/sheet)</option>
-                </select>
-            </div>
-        </div>
-        <p>
-            <button type="submit" class="secondary">Single-piece Avery PDF</button>
-            <a href="/pieces/sheet/setup">…or use the multi-piece sheet builder →</a>
-        </p>
-    </form>
 </div>
 
 <div class="card">

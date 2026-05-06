@@ -916,25 +916,88 @@ def test_pdf_render_envelope_produces_no10_pdf() -> None:
     assert b"/MediaBox [ 0 0 684 297 ]" in body
 
 
-def test_pdf_render_alignment_param_validated() -> None:
-    """An invalid alignment value falls back to 'left' silently rather
-    than raising — alignment is a UX-grade input, not a security one."""
+def test_pdf_render_alignment_params_validated() -> None:
+    """Invalid block_align/text_align values fall back to 'left' silently
+    rather than raising — alignment is a UX-grade input. All 4 valid
+    combinations of (block_align, text_align) produce a parseable PDF."""
     from mailtrace import pdf
     from mailtrace.routes.pieces import AVERY_LAYOUTS
 
     class _Stub:
         imb_letters = "T" * 65
-        recipient_block = "X"
+        recipient_block = "Recipient\n100 Main\nCity, ST, 12345"
         sender_block = ""
 
         def human_readable_imb(self) -> str:
             return "h"
 
-    # Valid options just produce a PDF.
-    for align in ("left", "center", "diagonal", ""):
+    # 4 valid combos.
+    for block in ("left", "center"):
+        for text in ("left", "center"):
+            body = pdf.render_label_sheet(
+                layout=AVERY_LAYOUTS["5163"],
+                pieces=[_Stub()],  # type: ignore[list-item]
+                block_align=block,
+                text_align=text,
+            )
+            assert body.startswith(b"%PDF-"), (block, text)
+    # Bad values silently fall back to "left" — no crash.
+    for bad in ("diagonal", "", "right", None):
         body = pdf.render_label_sheet(
             layout=AVERY_LAYOUTS["5163"],
             pieces=[_Stub()],  # type: ignore[list-item]
-            alignment=align,
+            block_align=bad if isinstance(bad, str) else "",
+            text_align=bad if isinstance(bad, str) else "",
         )
-        assert body.startswith(b"%PDF-"), align
+        assert body.startswith(b"%PDF-")
+
+
+def test_pdf_imb_meets_usps_length_spec_for_all_layouts() -> None:
+    """USPS-STD-39 requires the IMb's outside-to-outside length to be
+    between 2.683" and 3.225" (65 bars at 20-24 bars/inch). All three
+    Avery layouts must render the IMb within that range — otherwise
+    AFCS scanners may reject the piece."""
+    import re
+    import subprocess
+    from pathlib import Path
+
+    from mailtrace import pdf
+    from mailtrace.routes.pieces import AVERY_LAYOUTS
+
+    class _Stub:
+        imb_letters = "TADTADTDDFFADTFTFDTAFTDFADFTDFTDADTFAFFTDDFADTFDFFTDADTAFFTDADTAFF"
+        recipient_block = "Recipient\n100 Main\nCity, ST, 12345"
+        sender_block = ""
+
+        def human_readable_imb(self) -> str:
+            return "h"
+
+    USPS_MIN_IN = 2.683
+    USPS_MAX_IN = 3.225
+
+    for key, layout in AVERY_LAYOUTS.items():
+        body = pdf.render_label_sheet(layout=layout, pieces=[_Stub()])  # type: ignore[list-item]
+        # Use pdftotext -bbox-layout to extract the IMb word's xMin/xMax.
+        # Skip if pdftotext isn't installed (ci environments without poppler).
+        try:
+            tmp = Path(f"/tmp/_imb_spec_test_{key}.pdf")
+            tmp.write_bytes(body)
+            result = subprocess.run(
+                ["pdftotext", "-bbox-layout", str(tmp), "-"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            import pytest
+
+            pytest.skip("pdftotext (poppler) not available")
+        m = re.search(
+            r'<word xMin="([\d.]+)" yMin="[\d.]+" xMax="([\d.]+)"[^>]*>TADTAD',
+            result.stdout,
+        )
+        assert m is not None, f"could not find IMb word in {key} PDF"
+        width_in = (float(m.group(2)) - float(m.group(1))) / 72.0
+        assert USPS_MIN_IN <= width_in <= USPS_MAX_IN, (
+            f'{key} IMb width {width_in:.3f}" is outside USPS spec [{USPS_MIN_IN}-{USPS_MAX_IN}]'
+        )

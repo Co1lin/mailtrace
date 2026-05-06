@@ -708,6 +708,24 @@ async def piece_mark_mailed(piece_id: int, db: SessionDep, user: CurrentUserDep)
     return RedirectResponse(f"/pieces/{piece.id}", status_code=303)
 
 
+@router.post("/{piece_id}/label")
+async def piece_set_label(
+    piece_id: int,
+    db: SessionDep,
+    user: CurrentUserDep,
+    request: Request,
+    label: Annotated[str, Form()] = "",
+) -> Response:
+    """Update a piece's free-form label. Used to annotate after the fact:
+    "shipped from Alaska", "rent check Mar", etc. Empty string clears it.
+    Truncated to 80 chars (matches the DB column length)."""
+    piece = await _load_owned(db, user.id, piece_id)
+    piece.label = label.strip()[:80]
+    await db.commit()
+    request.session["piece_flash"] = "Label updated."
+    return RedirectResponse(f"/pieces/{piece.id}", status_code=303)
+
+
 def _archive_in_place(piece: MailPiece) -> None:
     if piece.archived_at is not None:
         return
@@ -824,17 +842,18 @@ async def download_envelope(
     piece_id: int,
     db: SessionDep,
     user: CurrentUserDep,
-    alignment: str = "left",
+    block_align: str = "left",
+    text_align: str = "left",
     inline: int = 0,
 ) -> Response:
     """Render a #10 envelope PDF for one piece.
 
-    `alignment`: "left" (default) or "center" — recipient block alignment.
-    `inline=1`: returns Content-Disposition: inline (for embedding in
-    a browser PDF viewer); otherwise triggers a download.
+    `block_align` / `text_align`: see render_envelope. Both default to
+    "left" — independent. `inline=1`: returns Content-Disposition:
+    inline (for embedding in a browser PDF viewer); otherwise downloads.
     """
     piece = await _load_owned(db, user.id, piece_id)
-    body = pdf.render_envelope(piece, alignment=alignment)
+    body = pdf.render_envelope(piece, block_align=block_align, text_align=text_align)
     filename = f"envelope_{piece.serial:06d}_{piece.recipient_zip_raw or 'na'}.pdf"
     disp = "inline" if inline else "attachment"
     return Response(
@@ -877,7 +896,12 @@ async def sheet_render(
       ids[]:        which MailPiece IDs to include (in print order)
       layout:       Avery model number (5163/5162/5161 or any sister number)
       start_row, start_col: where on the first sheet printing should start
-      alignment:    "left" (default) or "center" — content alignment per label
+      block_align:  "left" (default) or "center" — where the content block
+                    sits horizontally on each label
+      text_align:   "left" (default) or "center" — how each line within
+                    the block is justified. Independent of block_align,
+                    so block=center + text=left is a valid (and useful)
+                    combination for centered address blocks.
       disposition:  "attachment" (default; downloads the PDF) or "inline"
                     (embeds in a browser PDF viewer)
       mark_as_printed: opt-in toggle. When set ("true"/"on"/"1"), any
@@ -900,9 +924,12 @@ async def sheet_render(
         start_col = int(str(form.get("start_col", "1")))
     except ValueError as err:
         raise HTTPException(status_code=400, detail="row/col must be integers") from err
-    alignment = str(form.get("alignment", "left"))
-    if alignment not in ("left", "center"):
-        raise HTTPException(status_code=400, detail="alignment must be left or center")
+    block_align = str(form.get("block_align", "left"))
+    if block_align not in ("left", "center"):
+        raise HTTPException(status_code=400, detail="block_align must be left or center")
+    text_align = str(form.get("text_align", "left"))
+    if text_align not in ("left", "center"):
+        raise HTTPException(status_code=400, detail="text_align must be left or center")
     disposition = str(form.get("disposition", "attachment"))
     if disposition not in ("attachment", "inline"):
         raise HTTPException(status_code=400, detail="disposition must be attachment or inline")
@@ -932,7 +959,8 @@ async def sheet_render(
         pieces=ordered,
         start_row=start_row,
         start_col=start_col,
-        alignment=alignment,
+        block_align=block_align,
+        text_align=text_align,
     )
 
     # State mutation is opt-in — clicking Generate doesn't presume the user
@@ -960,6 +988,11 @@ async def sheet_render(
 # gutter — verify: 5/32 + 4 + 3/16 + 4 + 5/32 = 8.5"). They differ only in
 # label height + row count + top margin.
 #
+# Order matters: dict iteration preserves insertion order, and the sheet
+# setup template renders the first entry as the default-selected radio.
+# Order = smallest-label first (5161 → 5162 → 5163) so the default favors
+# the most common shipping use case.
+#
 # `aliases` lists Avery model numbers Avery itself documents as identical
 # templates (laser/inkjet/permanent variants). Users picking 8163 should land
 # on the 5163 entry, etc. Not exhaustive — we only list the popular ones.
@@ -967,20 +1000,20 @@ async def sheet_render(
 # `css_class` keys variant-specific font sizing in the sheet template, so a
 # 1"-tall 5161 label gets smaller fonts than a 2"-tall 5163.
 AVERY_LAYOUTS: dict[str, dict[str, Any]] = {
-    "5163": {
-        "name": "Avery 5163",
-        "model": "5163",
-        "aliases": ["8163", "5263", "5523", "5963", "8463"],
-        "rows": 5,
+    "5161": {
+        "name": "Avery 5161",
+        "model": "5161",
+        "aliases": ["8161", "5261", "8461"],
+        "rows": 10,
         "cols": 2,
-        "labels_per_sheet": 10,
+        "labels_per_sheet": 20,
         "label_width_in": 4.0,
-        "label_height_in": 2.0,
+        "label_height_in": 1.0,
         "top_margin_in": 0.5,
         "left_margin_in": 0.15625,  # 5/32"
         "col_pitch_in": 4.1875,  # label width + 3/16" gutter
-        "row_pitch_in": 2.0,  # no vertical gutter
-        "css_class": "label-5163",
+        "row_pitch_in": 1.0,  # no vertical gutter
+        "css_class": "label-5161",
     },
     "5162": {
         "name": "Avery 5162",
@@ -997,22 +1030,26 @@ AVERY_LAYOUTS: dict[str, dict[str, Any]] = {
         "row_pitch_in": 4.0 / 3.0,
         "css_class": "label-5162",
     },
-    "5161": {
-        "name": "Avery 5161",
-        "model": "5161",
-        "aliases": ["8161", "5261", "8461"],
-        "rows": 10,
+    "5163": {
+        "name": "Avery 5163",
+        "model": "5163",
+        "aliases": ["8163", "5263", "5523", "5963", "8463"],
+        "rows": 5,
         "cols": 2,
-        "labels_per_sheet": 20,
+        "labels_per_sheet": 10,
         "label_width_in": 4.0,
-        "label_height_in": 1.0,
+        "label_height_in": 2.0,
         "top_margin_in": 0.5,
         "left_margin_in": 0.15625,
         "col_pitch_in": 4.1875,
-        "row_pitch_in": 1.0,
-        "css_class": "label-5161",
+        "row_pitch_in": 2.0,
+        "css_class": "label-5163",
     },
 }
+
+# Default Avery model picked on first render. Persists per-browser via
+# localStorage after first selection (see sheet_setup.html JS).
+_DEFAULT_LAYOUT_KEY = "5161"
 
 # Map every alias (and the primary model) to its primary key, so users can
 # enter "8163" or "5163" interchangeably.
@@ -1085,7 +1122,8 @@ async def download_avery(
     row: int = 1,
     col: int = 1,
     layout: str = "5163",
-    alignment: str = "left",
+    block_align: str = "left",
+    text_align: str = "left",
     inline: int = 0,
 ) -> Response:
     """Render a single-piece Avery sheet (one piece in one cell of an
@@ -1094,10 +1132,17 @@ async def download_avery(
     layout_dict = resolve_layout(layout)
     if not (1 <= row <= layout_dict["rows"] and 1 <= col <= layout_dict["cols"]):
         raise HTTPException(status_code=400, detail="row/col out of range for this layout")
-    if alignment not in ("left", "center"):
-        raise HTTPException(status_code=400, detail="alignment must be left or center")
+    if block_align not in ("left", "center"):
+        raise HTTPException(status_code=400, detail="block_align must be left or center")
+    if text_align not in ("left", "center"):
+        raise HTTPException(status_code=400, detail="text_align must be left or center")
     body = pdf.render_single_label(
-        layout=layout_dict, piece=piece, row=row, col=col, alignment=alignment
+        layout=layout_dict,
+        piece=piece,
+        row=row,
+        col=col,
+        block_align=block_align,
+        text_align=text_align,
     )
     filename = f"avery_{piece.serial:06d}_{piece.recipient_zip_raw or 'na'}.pdf"
     disp = "inline" if inline else "attachment"

@@ -2,15 +2,12 @@
 {% block title %}mailtrace - pieces{% endblock %}
 {% block body %}
 <h1>Pieces</h1>
-<p>
-    <a href="/pieces/new">+ New piece</a>
-    &nbsp;·&nbsp;
-    <a href="/pieces/batch">+ Stock batch</a>
-    &nbsp;·&nbsp;
-    <a href="/pieces/import">+ CSV import</a>
-    &nbsp;·&nbsp;
-    <a href="/pieces/sheet/setup">Print sticker sheet</a>
-</p>
+<div class="action-row">
+    <a href="/pieces/new" class="btn">+ New piece</a>
+    <a href="/pieces/batch" class="btn">+ Stock batch</a>
+    <a href="/pieces/import" class="btn">+ CSV import</a>
+    <a href="/pieces/sheet/setup" class="btn secondary">Print sticker sheet</a>
+</div>
 
 {% macro tab(href, label, count, active) -%}
 {% if active -%}<strong>{{ label }} ({{ count }})</strong>{%- else -%}<a href="{{ href }}">{{ label }} ({{ count }})</a>{%- endif %}

@@ -271,6 +271,106 @@ async def test_create_piece_inline_then_download(
         assert piece.label == "rent check"
 
 
+async def test_piece_detail_label_edit_persists(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """The detail page exposes a label-edit form; POSTing a new label
+    updates piece.label and the next page render shows it. Use case:
+    annotate after the fact ('shipped from Alaska Mar 12')."""
+    from mailtrace.models import MailPiece
+
+    resp = await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+            # No label initially.
+        },
+        follow_redirects=False,
+    )
+    pid = int(resp.headers["location"].rsplit("/", 1)[-1])
+
+    # Detail page exposes the label-edit form.
+    page = await client.get(f"/pieces/{pid}")
+    assert page.status_code == 200
+    assert f'action="/pieces/{pid}/label"' in page.text
+    assert 'name="label"' in page.text
+
+    # POST a new label.
+    save = await client.post(
+        f"/pieces/{pid}/label",
+        data={"label": "shipped from Alaska Mar 12"},
+        follow_redirects=False,
+    )
+    assert save.status_code == 303
+    async with db_sessionmaker() as db:
+        piece = await db.get(MailPiece, pid)
+        assert piece is not None
+        assert piece.label == "shipped from Alaska Mar 12"
+
+    # Updating again with empty value clears it.
+    await client.post(f"/pieces/{pid}/label", data={"label": ""}, follow_redirects=False)
+    async with db_sessionmaker() as db:
+        piece = await db.get(MailPiece, pid)
+        assert piece is not None
+        assert piece.label == ""
+
+    # Long labels truncate to 80 chars (matches the DB column).
+    await client.post(f"/pieces/{pid}/label", data={"label": "x" * 200}, follow_redirects=False)
+    async with db_sessionmaker() as db:
+        piece = await db.get(MailPiece, pid)
+        assert piece is not None
+        assert len(piece.label) == 80
+
+
+async def test_piece_detail_no_print_section(
+    client: AsyncClient,
+) -> None:
+    """The Print card was removed from the detail page — all printing
+    flows through /pieces/sheet/setup. Detail page should not render
+    the envelope-download or single-piece-avery form."""
+    resp = await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    pid = int(resp.headers["location"].rsplit("/", 1)[-1])
+    page = await client.get(f"/pieces/{pid}")
+    assert page.status_code == 200
+    # No Print heading, no envelope/avery download form on this page.
+    assert "<h2>Print</h2>" not in page.text
+    assert f"/pieces/{pid}/download/envelope.pdf" not in page.text
+    assert f"/pieces/{pid}/download/avery.pdf" not in page.text
+
+
+async def test_pieces_list_uses_button_styled_action_links(
+    client: AsyncClient,
+) -> None:
+    """Top-of-page action 'links' on /pieces/ should be styled as buttons
+    via the .btn class — they were plain underlined links before, which
+    didn't read as calls-to-action."""
+    page = await client.get("/pieces/")
+    assert page.status_code == 200
+    # Each main action carries class="btn" (or "btn ..."), wrapped in an
+    # action-row container.
+    assert 'class="action-row"' in page.text
+    assert '<a href="/pieces/new" class="btn"' in page.text
+    assert '<a href="/pieces/batch" class="btn"' in page.text
+    assert '<a href="/pieces/import" class="btn"' in page.text
+    assert '<a href="/pieces/sheet/setup" class="btn' in page.text
+
+
 async def test_create_piece_zipless_imb(
     client: AsyncClient, db_sessionmaker: async_sessionmaker
 ) -> None:
@@ -2106,9 +2206,74 @@ async def test_sticker_sheet_setup_renders_radio_picker_and_layouts_json(
     assert 'name="disposition" value="attachment"' in page.text
     assert 'id="preview-btn"' in page.text
     assert 'id="preview-pane"' in page.text
-    # Alignment radio group (left/center).
-    assert 'name="alignment" value="left"' in page.text
-    assert 'name="alignment" value="center"' in page.text
+    # Block alignment + text alignment are now independent radio groups.
+    assert 'name="block_align" value="left"' in page.text
+    assert 'name="block_align" value="center"' in page.text
+    assert 'name="text_align" value="left"' in page.text
+    assert 'name="text_align" value="center"' in page.text
+
+
+async def test_sticker_sheet_setup_default_is_5161_first(client: AsyncClient) -> None:
+    """First-time visitors should see Avery 5161 as the default-selected
+    layout (smallest labels, most common shipping use case). Returning
+    visitors get their last choice via localStorage on the client."""
+    page = await client.get("/pieces/sheet/setup")
+    assert page.status_code == 200
+    # The radio with `checked` is for 5161, NOT 5163.
+    import re
+
+    matches = re.findall(
+        r'<input type="radio" name="layout" value="(\d+)"[^>]*\bchecked\b',
+        page.text,
+    )
+    assert matches == ["5161"], f"expected only 5161 checked, got {matches}"
+    # First radio in DOM order should also be 5161 (insertion order in
+    # AVERY_LAYOUTS dict drives render order).
+    all_radios = re.findall(r'<input type="radio" name="layout" value="(\d+)"', page.text)
+    assert all_radios[0] == "5161"
+    assert all_radios == ["5161", "5162", "5163"]
+
+
+async def test_sticker_sheet_setup_includes_localstorage_memory_script(
+    client: AsyncClient,
+) -> None:
+    """The page must emit JS that restores previously-selected radio
+    values from localStorage on load and saves new picks on change.
+    Generic helper covers all 'remember this' fields: layout,
+    block_align, text_align."""
+    page = await client.get("/pieces/sheet/setup")
+    assert page.status_code == 200
+    assert "localStorage" in page.text
+    # Generic helper iterates a REMEMBER list naming each persisted field.
+    assert '"layout"' in page.text  # in the JS REMEMBER array
+    assert '"block_align"' in page.text
+    assert '"text_align"' in page.text
+    # Per-field key prefix.
+    assert '"mailtrace."' in page.text or "mailtrace." in page.text
+
+
+async def test_sticker_sheet_setup_includes_shift_click_range_script(
+    client: AsyncClient,
+) -> None:
+    """The page must emit JS implementing shift+click range select on the
+    pieces table checkboxes, and a tip explaining it."""
+    # Need at least one piece so the table + script render.
+    await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    page = await client.get("/pieces/sheet/setup")
+    assert page.status_code == 200
+    assert "shift-click" in page.text or "shiftKey" in page.text
+    assert "shiftKey" in page.text  # the actual JS event property
 
 
 async def test_sticker_sheet_setup_lists_all_layouts(client: AsyncClient) -> None:
@@ -2268,11 +2433,11 @@ async def test_sticker_sheet_rejects_start_row_exceeding_layout(
     assert ok.status_code == 200
 
 
-async def test_sticker_sheet_alignment_param_accepts_left_or_center(
+async def test_sticker_sheet_alignment_split_block_and_text(
     client: AsyncClient,
 ) -> None:
-    """The new `alignment` form field accepts 'left' or 'center' and
-    rejects anything else with 400."""
+    """block_align and text_align are independent fields. All 4 valid
+    combinations render successfully; invalid values 400."""
     resp = await client.post(
         "/pieces/new",
         data={
@@ -2286,26 +2451,28 @@ async def test_sticker_sheet_alignment_param_accepts_left_or_center(
         follow_redirects=False,
     )
     pid = int(resp.headers["location"].rsplit("/", 1)[-1])
-    for align in ("left", "center"):
-        ok = await client.post(
-            "/pieces/sheet",
-            data={
-                "ids": [str(pid)],
-                "start_row": "1",
-                "start_col": "1",
-                "alignment": align,
-                "disposition": "inline",
-            },
-        )
-        assert ok.status_code == 200, align
-        assert ok.content.startswith(b"%PDF")
+    for block in ("left", "center"):
+        for text in ("left", "center"):
+            ok = await client.post(
+                "/pieces/sheet",
+                data={
+                    "ids": [str(pid)],
+                    "start_row": "1",
+                    "start_col": "1",
+                    "block_align": block,
+                    "text_align": text,
+                    "disposition": "inline",
+                },
+            )
+            assert ok.status_code == 200, (block, text)
+            assert ok.content.startswith(b"%PDF")
     bad = await client.post(
         "/pieces/sheet",
         data={
             "ids": [str(pid)],
             "start_row": "1",
             "start_col": "1",
-            "alignment": "diagonal",
+            "block_align": "diagonal",
             "disposition": "inline",
         },
     )

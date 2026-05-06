@@ -24,12 +24,18 @@
             width: 100%; padding: 0.45rem; border: 1px solid #ccc; border-radius: 4px;
             font-size: 0.95rem; box-sizing: border-box;
         }
-        button, input[type=submit] {
+        button, input[type=submit], a.btn {
+            display: inline-block;
             padding: 0.5rem 1rem; border: 0; background: #1f6feb; color: white;
             border-radius: 4px; cursor: pointer; font-size: 0.95rem;
+            text-decoration: none; line-height: normal;
         }
-        button.secondary { background: #555; }
-        button.danger { background: #b00; }
+        a.btn:hover { text-decoration: none; opacity: 0.9; }
+        button.secondary, a.btn.secondary { background: #555; }
+        button.danger, a.btn.danger { background: #b00; }
+        /* Action bars: wrap the buttons in a row so they line up nicely
+           on narrow viewports without the dot-separator awkwardness. */
+        .action-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin: 0.5rem 0; }
         .row { display: flex; gap: 0.5rem; }
         .row > * { flex: 1; }
         a { color: #1f6feb; }

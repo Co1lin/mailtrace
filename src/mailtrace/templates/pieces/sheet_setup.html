@@ -88,7 +88,7 @@
         {% for key, lay in layouts.items() %}
         <label class="layout-card">
             <input type="radio" name="layout" value="{{ key }}"
-                   {% if key == "5163" %}checked{% endif %}>
+                   {% if key == "5161" %}checked{% endif %}>
             <span>
                 <strong>Avery {{ lay.model }}</strong>
                 — {% if lay.label_height_in == 4.0 / 3.0 %}4″ × 1⅓″
@@ -99,18 +99,64 @@
         </label>
         {% endfor %}
     </div>
-
-    <h2>Content alignment</h2>
+    <h2>Block position</h2>
+    <p><small>Where the IMb + address bounding box sits horizontally
+       on each label. Independent of how lines are justified within
+       the block (next section).</small></p>
     <div class="align-radios">
         <label class="align-card">
-            <input type="radio" name="alignment" value="left" checked>
-            <span><strong>Left</strong> — IMb and address aligned to the left edge of each label.</span>
+            <input type="radio" name="block_align" value="left" checked>
+            <span><strong>Left</strong> — block anchored at the left padding of each label.</span>
         </label>
         <label class="align-card">
-            <input type="radio" name="alignment" value="center">
-            <span><strong>Center</strong> — IMb and address horizontally centered. Visually balances the sheet when text is shorter than 4″.</span>
+            <input type="radio" name="block_align" value="center">
+            <span><strong>Center</strong> — block centered on the label (the widest line determines the bounding box).</span>
         </label>
     </div>
+
+    <h2>Text alignment within the block</h2>
+    <p><small>How each line is justified within the bounding box.
+       <strong>Block centered + text left</strong> is the conventional
+       address-block layout — the block as a whole is centered, but
+       each line still reads left-to-right with a flush left edge.</small></p>
+    <div class="align-radios">
+        <label class="align-card">
+            <input type="radio" name="text_align" value="left" checked>
+            <span><strong>Left</strong> — every line shares a common left edge (natural for addresses).</span>
+        </label>
+        <label class="align-card">
+            <input type="radio" name="text_align" value="center">
+            <span><strong>Center</strong> — every line is centered independently within the block.</span>
+        </label>
+    </div>
+
+    <script>
+    // Generic localStorage memory for radio groups: on load, override the
+    // server-rendered default with whatever the user picked last time;
+    // on change, save the new pick. Applied to every "remember this"
+    // form field on the platform that's a radio group. Per-action toggles
+    // (mark_as_printed, etc.) are intentionally NOT remembered — those
+    // confirm a one-time intent, not a preference.
+    (function () {
+        const REMEMBER = ["layout", "block_align", "text_align"];
+        REMEMBER.forEach(function (name) {
+            const KEY = "mailtrace." + name;
+            let stored = null;
+            try { stored = localStorage.getItem(KEY); } catch (_) { /* private mode */ }
+            if (stored) {
+                const radio = document.querySelector(
+                    'input[name="' + name + '"][value="' + stored + '"]'
+                );
+                if (radio) radio.checked = true;
+            }
+            document.querySelectorAll('input[name="' + name + '"]').forEach(function (r) {
+                r.addEventListener("change", function () {
+                    try { localStorage.setItem(KEY, r.value); } catch (_) { /* ignore */ }
+                });
+            });
+        });
+    })();
+    </script>
 
     <h2>Starting cell</h2>
     <p><small>Click the cell where the first piece should land. Diagonal-striped
@@ -222,7 +268,8 @@
     </p>
     <p><small>Pieces are sorted newest-first; the recent-selector picks
        anything whose <em>Created</em> is within the last 10 minutes
-       (your browser's clock).</small></p>
+       (your browser's clock). <strong>Tip:</strong> shift-click two
+       checkboxes to select (or deselect) the entire range between them.</small></p>
     <table>
         <thead><tr>
             <th></th><th>Created</th><th>Label</th><th>Recipient</th><th>Status</th><th>IMb</th>
@@ -268,6 +315,28 @@ function selectRecentPieces(minutes) {
         c.checked = !isNaN(t) && t >= cutoffMs;
     });
 }
+
+// Shift+click range select: clicking a checkbox while holding Shift
+// applies the just-clicked checkbox's NEW state to every checkbox between
+// it and the previously-clicked one (inclusive). Works in DOM order, which
+// matches the visible row order. No anchor reset on regular clicks — the
+// most-recently-clicked box is always the new anchor.
+(function () {
+    const boxes = Array.from(document.querySelectorAll('input[name=ids]'));
+    let anchor = null;
+    boxes.forEach(function (cb, i) {
+        cb.addEventListener("click", function (e) {
+            if (e.shiftKey && anchor && anchor !== cb) {
+                const a = boxes.indexOf(anchor);
+                const b = i;
+                const [from, to] = a < b ? [a, b] : [b, a];
+                const newState = cb.checked;  // already toggled by the click
+                for (let j = from; j <= to; j++) boxes[j].checked = newState;
+            }
+            anchor = cb;
+        });
+    });
+})();
 
 // Inline PDF preview: POST the form via fetch, get the PDF blob, drop
 // it into the iframe via a blob URL. Keeps the user on this page —
