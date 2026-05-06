@@ -36,7 +36,7 @@
         <tbody>
         {% for p in recent_pieces %}
         <tr>
-            <td><a href="/pieces/{{ p.id }}">{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</a></td>
+            <td><a href="/pieces/{{ p.id }}"><time data-utc="{{ p.created_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</time></a></td>
             <td>{{ p.label or '—' }}</td>
             <td>{{ p.recipient_block.split('\n')[0] if p.recipient_block else '—' }}</td>
             <td><span class="pill">{{ p.status }}</span></td>

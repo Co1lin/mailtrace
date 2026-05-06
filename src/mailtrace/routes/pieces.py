@@ -251,18 +251,28 @@ async def create_one(
 # ---------------------------------------------------------------------------
 
 
+_BATCH_COUNT_LIMIT = 50  # per-row safety so a typo can't generate 10k pieces
+_BATCH_TOTAL_LIMIT = 500  # cumulative cap across all rows in one submission
+_BATCH_INITIAL_ROWS = 6  # rendered on first page load (user can "+ Add row")
+
+
 @router.get("/batch", response_class=HTMLResponse)
 async def batch_form(request: Request, db: SessionDep, user: CurrentUserDep) -> HTMLResponse:
     addresses = await _user_addresses(db, user.id)
     response: HTMLResponse = request.app.state.templates.TemplateResponse(
         request,
         "pieces/batch.html",
-        {"user": user, "addresses": addresses, "error": None, "row_count": 4},
+        {
+            "user": user,
+            "addresses": addresses,
+            "error": None,
+            "row_count": _BATCH_INITIAL_ROWS,
+            "default_count": 1,
+            "batch_count_limit": _BATCH_COUNT_LIMIT,
+            "batch_total_limit": _BATCH_TOTAL_LIMIT,
+        },
     )
     return response
-
-
-_BATCH_COUNT_LIMIT = 50  # per-row safety so a typo can't generate 10k pieces
 
 
 @router.post("/batch")
@@ -286,22 +296,43 @@ async def batch_create(
             }
         )
 
+    # Global default: applied to any row whose Count is left blank. Per-row
+    # Count overrides this (use 0 to skip, or a higher number for extras).
+    default_count_raw = str(form.get("default_count", "") or "").strip() or "1"
+    try:
+        default_count = int(default_count_raw)
+    except ValueError:
+        default_count = 1
+    if default_count < 0:
+        default_count = 0
+    if default_count > _BATCH_COUNT_LIMIT:
+        default_count = _BATCH_COUNT_LIMIT
+
     # Form-level toggle: default behavior is "stock" (generate IMbs for
     # later printing/mailing). When checked, mark all created pieces as
     # already mailed (start polling immediately).
     mark_as_mailed = str(form.get("mark_as_mailed", "")).lower() in ("on", "true", "1")
     initial_status = STATUS_IN_FLIGHT if mark_as_mailed else STATUS_GENERATED
 
-    created: list[MailPiece] = []
+    # Pre-resolve each row into a "plan" tuple before any DB writes so we
+    # can interleave creation order: A,B,C,A,B,C instead of A,A,A,B,B,C.
+    # Skips blank-recipient rows silently; collects per-row errors otherwise.
     errors: list[str] = []
-    store = request.app.state.store
+    plan: list[dict[str, Any]] = []
     for i, row in enumerate(rows):
         if not row["recipient_id"]:
             continue  # blank row: skip silently
-        try:
-            count = max(1, int(row["count"])) if row["count"].strip() else 1
-        except ValueError:
-            errors.append(f"row {i + 1}: count must be an integer")
+        # Per-row count: blank → use default; explicit 0 → skip this row.
+        raw = row["count"].strip()
+        if not raw:
+            count = default_count
+        else:
+            try:
+                count = int(raw)
+            except ValueError:
+                errors.append(f"row {i + 1}: count must be an integer")
+                continue
+        if count <= 0:
             continue
         if count > _BATCH_COUNT_LIMIT:
             errors.append(f"row {i + 1}: count {count} exceeds per-row limit {_BATCH_COUNT_LIMIT}")
@@ -311,16 +342,45 @@ async def batch_create(
             recipient = await _load_address_or_none(
                 db, user.id, _parse_optional_int(row["recipient_id"])
             )
-            if recipient is None:
-                errors.append(f"row {i + 1}: recipient required")
+        except HTTPException as err:
+            errors.append(f"row {i + 1}: {err.detail}")
+            continue
+        if recipient is None:
+            errors.append(f"row {i + 1}: recipient required")
+            continue
+        plan.append(
+            {
+                "row_index": i,
+                "count": count,
+                "label": row["label"],
+                "sender": sender,
+                "recipient": recipient,
+                "include_zip": row["include_zip"] in ("on", "true", "1"),
+            }
+        )
+
+    total = sum(p["count"] for p in plan)
+    if total > _BATCH_TOTAL_LIMIT:
+        errors.append(f"total of {total} pieces exceeds per-submission limit {_BATCH_TOTAL_LIMIT}")
+        plan = []  # refuse the whole submission rather than partially creating
+
+    # Round-robin interleave: round 0 emits one piece per row that wants ≥1
+    # copy, round 1 emits one per row that wants ≥2, … through max(counts).
+    # Rows with smaller counts naturally drop out as rounds advance.
+    created: list[MailPiece] = []
+    store = request.app.state.store
+    max_count = max((p["count"] for p in plan), default=0)
+    for round_idx in range(max_count):
+        for entry in plan:
+            if round_idx >= entry["count"]:
                 continue
-            for _ in range(count):
-                draft = PieceDraft(
-                    label=row["label"],
-                    sender_address=sender,
-                    recipient_address=recipient,
-                    include_zip_in_imb=row["include_zip"] in ("on", "true", "1"),
-                )
+            draft = PieceDraft(
+                label=entry["label"],
+                sender_address=entry["sender"],
+                recipient_address=entry["recipient"],
+                include_zip_in_imb=entry["include_zip"],
+            )
+            try:
                 piece = await services.create_piece(
                     db,
                     store=store,
@@ -328,10 +388,11 @@ async def batch_create(
                     draft=draft,
                     initial_status=initial_status,
                 )
-                created.append(piece)
-        except (PieceValidationError, HTTPException) as err:
-            detail = err.detail if isinstance(err, HTTPException) else str(err)
-            errors.append(f"row {i + 1}: {detail}")
+            except (PieceValidationError, HTTPException) as err:
+                detail = err.detail if isinstance(err, HTTPException) else str(err)
+                errors.append(f"row {entry['row_index'] + 1}: {detail}")
+                continue
+            created.append(piece)
 
     if errors and not created:
         addresses = await _user_addresses(db, user.id)
@@ -343,7 +404,10 @@ async def batch_create(
                 "user": user,
                 "addresses": addresses,
                 "error": " · ".join(errors),
-                "row_count": max(len(rows), 4),
+                "row_count": max(len(rows), _BATCH_INITIAL_ROWS),
+                "default_count": default_count,
+                "batch_count_limit": _BATCH_COUNT_LIMIT,
+                "batch_total_limit": _BATCH_TOTAL_LIMIT,
             },
             status_code=400,
         )
@@ -778,7 +842,7 @@ async def sheet_setup(request: Request, db: SessionDep, user: CurrentUserDep) ->
     response: HTMLResponse = request.app.state.templates.TemplateResponse(
         request,
         "pieces/sheet_setup.html",
-        {"user": user, "pieces": pieces},
+        {"user": user, "pieces": pieces, "layouts": AVERY_LAYOUTS},
     )
     return response
 
@@ -807,7 +871,7 @@ async def sheet_render(
     if doc_type not in ("pdf", "html"):
         raise HTTPException(status_code=400, detail="doc_type must be pdf or html")
 
-    layout = AVERY_8163_LAYOUT
+    layout = resolve_layout(str(form.get("layout", "5163")))
     if not (1 <= start_row <= layout["rows"] and 1 <= start_col <= layout["cols"]):
         raise HTTPException(status_code=400, detail="start row/col out of range")
 
@@ -849,18 +913,89 @@ async def sheet_render(
     )
 
 
-# Avery 8163: 4 in by 2 in, 5 rows by 2 cols, 10 labels per page.
-AVERY_8163_LAYOUT: dict[str, Any] = {
-    "name": "Avery 8163",
-    "rows": 5,
-    "cols": 2,
-    "label_width_in": 4.0,
-    "label_height_in": 2.0,
-    "top_margin_in": 0.5,
-    "left_margin_in": 0.2,
-    "col_pitch_in": 4.25,  # label width + gutter
-    "row_pitch_in": 2.0,
+# Avery US Letter shipping/address label sheets. All three families share the
+# same horizontal geometry (2 cols, 4" wide labels, 5/32" side margin, 3/16"
+# gutter — verify: 5/32 + 4 + 3/16 + 4 + 5/32 = 8.5"). They differ only in
+# label height + row count + top margin.
+#
+# `aliases` lists Avery model numbers Avery itself documents as identical
+# templates (laser/inkjet/permanent variants). Users picking 8163 should land
+# on the 5163 entry, etc. Not exhaustive — we only list the popular ones.
+#
+# `css_class` keys variant-specific font sizing in the sheet template, so a
+# 1"-tall 5161 label gets smaller fonts than a 2"-tall 5163.
+AVERY_LAYOUTS: dict[str, dict[str, Any]] = {
+    "5163": {
+        "name": "Avery 5163",
+        "model": "5163",
+        "aliases": ["8163", "5263", "5523", "5963", "8463"],
+        "rows": 5,
+        "cols": 2,
+        "labels_per_sheet": 10,
+        "label_width_in": 4.0,
+        "label_height_in": 2.0,
+        "top_margin_in": 0.5,
+        "left_margin_in": 0.15625,  # 5/32"
+        "col_pitch_in": 4.1875,  # label width + 3/16" gutter
+        "row_pitch_in": 2.0,  # no vertical gutter
+        "css_class": "label-5163",
+    },
+    "5162": {
+        "name": "Avery 5162",
+        "model": "5162",
+        "aliases": ["8162", "5262", "8462"],
+        "rows": 7,
+        "cols": 2,
+        "labels_per_sheet": 14,
+        "label_width_in": 4.0,
+        "label_height_in": 4.0 / 3.0,  # 1 1/3"
+        "top_margin_in": 5.0 / 6.0,  # 0.8333" — (11 - 7*4/3) / 2
+        "left_margin_in": 0.15625,
+        "col_pitch_in": 4.1875,
+        "row_pitch_in": 4.0 / 3.0,
+        "css_class": "label-5162",
+    },
+    "5161": {
+        "name": "Avery 5161",
+        "model": "5161",
+        "aliases": ["8161", "5261", "8461"],
+        "rows": 10,
+        "cols": 2,
+        "labels_per_sheet": 20,
+        "label_width_in": 4.0,
+        "label_height_in": 1.0,
+        "top_margin_in": 0.5,
+        "left_margin_in": 0.15625,
+        "col_pitch_in": 4.1875,
+        "row_pitch_in": 1.0,
+        "css_class": "label-5161",
+    },
 }
+
+# Map every alias (and the primary model) to its primary key, so users can
+# enter "8163" or "5163" interchangeably.
+_LAYOUT_ALIAS_INDEX: dict[str, str] = {
+    alias: key for key, layout in AVERY_LAYOUTS.items() for alias in [key, *layout["aliases"]]
+}
+
+
+def resolve_layout(model_or_alias: str) -> dict[str, Any]:
+    """Resolve an Avery model number (or alias) to its layout dict.
+
+    Raises HTTPException(400) on unknown input — caller is a request handler.
+    """
+    key = _LAYOUT_ALIAS_INDEX.get(model_or_alias.strip())
+    if not key:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown Avery model {model_or_alias!r}; supported: "
+            + ", ".join(sorted(_LAYOUT_ALIAS_INDEX)),
+        )
+    return AVERY_LAYOUTS[key]
+
+
+# Backward-compat alias: tests + earlier callers reference this name.
+AVERY_8163_LAYOUT: dict[str, Any] = AVERY_LAYOUTS["5163"]
 
 
 def _allocate_sheet(
@@ -909,9 +1044,13 @@ async def download_avery(
     user: CurrentUserDep,
     row: int = 1,
     col: int = 1,
+    layout: str = "5163",
 ) -> Response:
     piece = await _load_owned(db, user.id, piece_id)
-    return _render_piece_doc(request, piece, "avery", ext, row=row, col=col)
+    layout_dict = resolve_layout(layout)
+    if not (1 <= row <= layout_dict["rows"] and 1 <= col <= layout_dict["cols"]):
+        raise HTTPException(status_code=400, detail="row/col out of range for this layout")
+    return _render_piece_doc(request, piece, "avery", ext, row=row, col=col, layout=layout_dict)
 
 
 def _render_piece_doc(
@@ -922,6 +1061,7 @@ def _render_piece_doc(
     *,
     row: int = 1,
     col: int = 1,
+    layout: dict[str, Any] | None = None,
 ) -> Response:
     if format_type == "envelope":
         template_name = "envelope.html"
@@ -939,6 +1079,7 @@ def _render_piece_doc(
         barcode=piece.imb_letters,
         row=row,
         col=col,
+        layout=layout or AVERY_LAYOUTS["5163"],
     )
     if ext == "html":
         return HTMLResponse(rendered)

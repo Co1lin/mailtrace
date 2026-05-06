@@ -22,30 +22,39 @@ body { margin: 0; }
 .page:last-child { page-break-after: auto; }
 .label {
     position: absolute;
-    padding: 0.1in;
     overflow: hidden;
 }
-.usps-barcode {
-    font-family: "USPSIMBStandard";
-    font-size: 16pt;
-    margin-bottom: 0.05in;
-}
-.barcode-humanreadable { font-size: 9pt; }
-.recipient-text {
-    font-family: "DejaVu Serif", serif;
-    white-space: pre-line;
-    font-size: 11pt;
-}
+.usps-barcode { font-family: "USPSIMBStandard"; }
+.recipient-text { font-family: "DejaVu Serif", serif; white-space: pre-line; }
+
+/* Variant-specific content sizing — taller labels can show more, the
+   1" tall 5161 drops the human-readable IMb line to fit. IMb font sizes
+   are kept ≥ 14pt to stay above USPS' 0.125" minimum bar height. */
+.label-5163 { padding: 0.1in; }
+.label-5163 .usps-barcode { font-size: 16pt; margin-bottom: 0.05in; }
+.label-5163 .barcode-humanreadable { font-size: 9pt; }
+.label-5163 .recipient-text { font-size: 11pt; }
+
+.label-5162 { padding: 0.08in; }
+.label-5162 .usps-barcode { font-size: 16pt; margin-bottom: 0.03in; }
+.label-5162 .barcode-humanreadable { font-size: 8pt; }
+.label-5162 .recipient-text { font-size: 10pt; }
+
+.label-5161 { padding: 0.06in; }
+.label-5161 .usps-barcode { font-size: 14pt; margin-bottom: 0.02in; }
+.label-5161 .barcode-humanreadable { display: none; }  /* no room on a 1" label */
+.label-5161 .recipient-text { font-size: 8.5pt; line-height: 1.15; }
 </style>
 </head>
 <body>
 {% for cells in pages %}
 <div class="page">
     {% for cell in cells %}
-    <div class="label" style="top: {{ '%.3f'|format(cell.top_in) }}in;
-                              left: {{ '%.3f'|format(cell.left_in) }}in;
-                              width: {{ layout.label_width_in }}in;
-                              height: {{ layout.label_height_in }}in;">
+    <div class="label {{ layout.css_class }}"
+         style="top: {{ '%.4f'|format(cell.top_in) }}in;
+                left: {{ '%.4f'|format(cell.left_in) }}in;
+                width: {{ layout.label_width_in }}in;
+                height: {{ '%.4f'|format(layout.label_height_in) }}in;">
         <div class="usps-barcode">{{ cell.piece.imb_letters }}</div>
         <div class="barcode-humanreadable">{{ cell.piece.human_readable_imb() }}</div>
         <div class="recipient-text">{{ cell.piece.recipient_block }}</div>

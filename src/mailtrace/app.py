@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
@@ -66,8 +66,32 @@ def _ensure_sqlite_dir(database_url: str) -> None:
         parent.mkdir(parents=True, exist_ok=True)
 
 
+# Columns added after the first release. `create_all` only creates tables
+# that don't exist; it never adds new columns to existing ones. For each
+# entry below, we ALTER TABLE … ADD COLUMN at startup if the column is
+# missing — keeps existing SQLite/Postgres deployments upgrading cleanly
+# without dragging in Alembic. Only safe for nullable columns or columns
+# with a static default; never use this for NOT NULL without a default.
+_ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    # (table, column, full DDL fragment after ADD COLUMN)
+    ("users", "timezone", "VARCHAR(64)"),
+)
+
+
+def _apply_additive_columns_sync(sync_conn: Any) -> None:
+    insp = inspect(sync_conn)
+    for table, column, ddl in _ADDITIVE_COLUMNS:
+        if not insp.has_table(table):
+            continue  # create_all will have made it with the column already
+        existing = {c["name"] for c in insp.get_columns(table)}
+        if column in existing:
+            continue
+        sync_conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        log.info("applied additive column: %s.%s %s", table, column, ddl)
+
+
 async def init_db(engine: AsyncEngine) -> None:
-    """Run create_all against an existing engine.
+    """Run create_all against an existing engine + apply additive ALTERs.
 
     Used by tests (which manage their own engine lifecycle) and by the
     `mailtrace admin` CLI commands (single-process, no race). The
@@ -79,6 +103,7 @@ async def init_db(engine: AsyncEngine) -> None:
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_apply_additive_columns_sync)
 
 
 def init_db_sync(database_url: str) -> None:

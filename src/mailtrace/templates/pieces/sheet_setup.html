@@ -2,24 +2,41 @@
 {% block title %}mailtrace - print sheet{% endblock %}
 {% block body %}
 <h1>Print sticker sheet</h1>
-<p class="lede">Pick which pieces to print, then choose where on the Avery
-   8163 sheet (4&quot;×2&quot;, 10 labels per page) to start. Skipping
-   already-used cells is the point — partial sheets stay usable.</p>
+<p class="lede">Pick the sheet size you'll feed into the printer, choose where
+   on it to start, then check off the pieces. Pieces fill
+   <strong>left → right within each row, then top → bottom</strong> by row.
+   Skipping already-used cells is the point — partial sheets stay usable.
+   Subsequent pages always start at row 1, column 1.</p>
 <p><small>Generating the PDF auto-marks any <strong>generated</strong> pieces
    as <strong>printed</strong>. HTML preview doesn't change state.</small></p>
 
 <div class="card">
 <form method="POST" action="/pieces/sheet">
     <h2>Layout</h2>
-    <p><strong>Avery 8163</strong> · 5 rows × 2 columns · 4&quot;×2&quot; labels</p>
+    <label>Sheet size <small>(pick the Avery model printed on your sheet — sister model numbers map to the same template)</small></label>
+    <select name="layout" id="layout-select">
+        {% for key, lay in layouts.items() %}
+        <option value="{{ key }}"
+                data-rows="{{ lay.rows }}"
+                data-cols="{{ lay.cols }}"
+                {% if key == "5163" %}selected{% endif %}>
+            Avery {{ lay.model }} —
+            {% if lay.label_height_in == 4.0 / 3.0 %}4″ × 1⅓″
+            {% else %}{{ lay.label_width_in|int if lay.label_width_in == lay.label_width_in|int else lay.label_width_in }}″ × {{ lay.label_height_in|int if lay.label_height_in == lay.label_height_in|int else lay.label_height_in }}″{% endif %}
+            ({{ lay.labels_per_sheet }}/sheet, {{ lay.rows }}×{{ lay.cols }})
+            · also {{ lay.aliases|join(", ") }}
+        </option>
+        {% endfor %}
+    </select>
+
     <div class="row">
         <div>
-            <label>Start row (1-5)</label>
-            <input type="number" name="start_row" min="1" max="5" value="1">
+            <label>Start row <small id="row-hint">(1–5)</small></label>
+            <input type="number" name="start_row" id="start-row" min="1" max="5" value="1">
         </div>
         <div>
-            <label>Start column (1-2)</label>
-            <input type="number" name="start_col" min="1" max="2" value="1">
+            <label>Start column <small id="col-hint">(1–2)</small></label>
+            <input type="number" name="start_col" id="start-col" min="1" max="2" value="1">
         </div>
         <div>
             <label>Output</label>
@@ -29,14 +46,42 @@
             </select>
         </div>
     </div>
+    <script>
+        // Keep the start-row/col inputs' max attribute (and value, if it
+        // overflows) in sync with whichever sheet size is selected.
+        (function () {
+            const sel = document.getElementById("layout-select");
+            const rowInput = document.getElementById("start-row");
+            const colInput = document.getElementById("start-col");
+            const rowHint = document.getElementById("row-hint");
+            const colHint = document.getElementById("col-hint");
+            function sync() {
+                const opt = sel.options[sel.selectedIndex];
+                const rows = parseInt(opt.dataset.rows, 10);
+                const cols = parseInt(opt.dataset.cols, 10);
+                rowInput.max = rows;
+                colInput.max = cols;
+                rowHint.textContent = `(1–${rows})`;
+                colHint.textContent = `(1–${cols})`;
+                if (parseInt(rowInput.value, 10) > rows) rowInput.value = rows;
+                if (parseInt(colInput.value, 10) > cols) colInput.value = cols;
+            }
+            sel.addEventListener("change", sync);
+            sync();
+        })();
+    </script>
 
     <h2>Pieces</h2>
     {% if not pieces %}
     <p class="lede">No active pieces. <a href="/pieces/new">Create one first.</a></p>
     {% else %}
     <p>
-        <button type="button" class="secondary" onclick="document.querySelectorAll('input[name=ids]').forEach(c => c.checked = true)">Select all</button>
-        <button type="button" class="secondary" onclick="document.querySelectorAll('input[name=ids]').forEach(c => c.checked = false)">Clear</button>
+        <button type="button" class="secondary" onclick="selectAllPieces(true)">Select all</button>
+        <button type="button" class="secondary" onclick="selectRecentPieces(10)">Select last 10 min</button>
+        <button type="button" class="secondary" onclick="selectAllPieces(false)">Clear</button>
+        <small>Pieces are sorted newest-first; the recent-selector picks
+           anything whose <em>Created</em> is within the last 10 minutes
+           (your browser's clock).</small>
     </p>
     <table>
         <thead><tr>
@@ -45,8 +90,9 @@
         <tbody>
         {% for p in pieces %}
         <tr>
-            <td><input type="checkbox" name="ids" value="{{ p.id }}"></td>
-            <td>{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td><input type="checkbox" name="ids" value="{{ p.id }}"
+                       data-created-at="{{ p.created_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}"></td>
+            <td><time data-utc="{{ p.created_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</time></td>
             <td>{{ p.label or '—' }}</td>
             <td>{{ p.recipient_block.split('\n')[0] if p.recipient_block else '—' }}</td>
             <td><span class="pill">{{ p.status }}</span></td>
@@ -55,6 +101,19 @@
         {% endfor %}
         </tbody>
     </table>
+    <script>
+        function selectAllPieces(checked) {
+            document.querySelectorAll('input[name=ids]').forEach(function (c) { c.checked = checked; });
+        }
+        function selectRecentPieces(minutes) {
+            const cutoffMs = Date.now() - minutes * 60 * 1000;
+            document.querySelectorAll('input[name=ids]').forEach(function (c) {
+                const iso = c.dataset.createdAt;
+                const t = iso ? new Date(iso).getTime() : NaN;
+                c.checked = !isNaN(t) && t >= cutoffMs;
+            });
+        }
+    </script>
     <p><button type="submit">Generate sheet</button></p>
     {% endif %}
 </form>

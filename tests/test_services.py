@@ -588,6 +588,88 @@ async def test_dispatch_no_smtp_or_disabled_is_noop(
         assert sent == 0
 
 
+async def test_dispatch_notifications_formats_scan_in_user_timezone(
+    db_sessionmaker: async_sessionmaker, store: Store
+) -> None:
+    """Email body must show scan timestamps in the user's saved timezone,
+    not UTC. A scan at 2025-01-15 10:00 UTC should render as 05:00 EST
+    for an America/New_York user (UTC-5 in January)."""
+    async with db_sessionmaker() as db:
+        u = User(
+            email="east-coast@example.com",
+            password_hash="x",
+            mailer_id=314159,
+            notify_on_scans=True,
+            timezone="America/New_York",
+        )
+        db.add(u)
+        await db.commit()
+        await db.refresh(u)
+        piece = await services.create_piece(
+            db,
+            store=store,
+            user=u,
+            draft=PieceDraft(
+                recipient_block_inline="x",
+                recipient_zip_inline="94105",
+            ),
+        )
+        await services.ingest_scan(
+            db,
+            piece,
+            {"scanDatetime": "2025-01-15T10:00", "scanEventCode": "SL"},
+            source="poll",
+        )
+        await db.commit()
+
+        mailer = _RecordingMailer()
+        sent = await services.dispatch_notifications(db, smtp=_smtp(), mailer=mailer)
+        assert sent == 1
+        body = mailer.sent[0].body_text
+        # 10:00 UTC → 05:00 in NYC (EST, UTC-5) on Jan 15.
+        assert "2025-01-15 05:00 EST" in body, f"expected NYC time, got body:\n{body}"
+        # And NOT the UTC literal.
+        assert "10:00 UTC" not in body and "2025-01-15 10:00" not in body
+
+
+async def test_dispatch_notifications_falls_back_to_utc_when_user_has_no_tz(
+    db_sessionmaker: async_sessionmaker, store: Store
+) -> None:
+    """Users who haven't set a timezone (or whose tz string is invalid)
+    get UTC formatting in emails — never a crash."""
+    async with db_sessionmaker() as db:
+        u = User(
+            email="utc@example.com",
+            password_hash="x",
+            mailer_id=314159,
+            notify_on_scans=True,
+            timezone=None,
+        )
+        db.add(u)
+        await db.commit()
+        await db.refresh(u)
+        piece = await services.create_piece(
+            db,
+            store=store,
+            user=u,
+            draft=PieceDraft(
+                recipient_block_inline="x",
+                recipient_zip_inline="94105",
+            ),
+        )
+        await services.ingest_scan(
+            db,
+            piece,
+            {"scanDatetime": "2025-01-15T10:00", "scanEventCode": "SL"},
+            source="poll",
+        )
+        await db.commit()
+        mailer = _RecordingMailer()
+        await services.dispatch_notifications(db, smtp=_smtp(), mailer=mailer)
+        body = mailer.sent[0].body_text
+        assert "2025-01-15 10:00 UTC" in body, f"expected UTC fallback, got:\n{body}"
+
+
 # ---------------------------------------------------------------------------
 # Sheet allocator
 # ---------------------------------------------------------------------------
@@ -628,6 +710,110 @@ def test_sheet_allocator_skips_used_cells_on_first_page() -> None:
     pieces = [_Stub(0)]
     pages = _allocate_sheet(pieces, layout=AVERY_8163_LAYOUT, start_row=3, start_col=2)  # type: ignore[arg-type]
     cell = pages[0][0]
-    # row 3 col 2: top = 0.5 + 2*2 = 4.5in, left = 0.2 + 1*4.25 = 4.45in
+    # row 3 col 2 on Avery 5163 spec geometry:
+    #   top  = 0.5    + 2 * 2.0    = 4.5in
+    #   left = 5/32"  + 1 * 4.1875 = 4.34375in   (5/32 = 0.15625)
     assert abs(cell["top_in"] - 4.5) < 1e-6
-    assert abs(cell["left_in"] - 4.45) < 1e-6
+    assert abs(cell["left_in"] - 4.34375) < 1e-6
+
+
+def test_avery_layouts_match_letter_sheet_dimensions() -> None:
+    """All Avery layouts must tile cleanly inside an 8.5"x11" sheet:
+    side margins + label widths + gutter must sum to 8.5"; top/bottom
+    margins + label heights * rows must sum to 11" (within float epsilon).
+
+    This regression-tests typos in the layout dict — a half-mm error here
+    would mean labels physically misalign with the diecut sticker stock."""
+    from mailtrace.routes.pieces import AVERY_LAYOUTS
+
+    for key, lay in AVERY_LAYOUTS.items():
+        # Width: left_margin + col_pitch * (cols - 1) + label_width + right_margin == 8.5
+        # (right margin is implied; we infer it and check it equals left_margin)
+        used_width = (
+            lay["left_margin_in"] + lay["col_pitch_in"] * (lay["cols"] - 1) + lay["label_width_in"]
+        )
+        right_margin = 8.5 - used_width
+        assert abs(right_margin - lay["left_margin_in"]) < 1e-6, (
+            f"{key}: right margin {right_margin} != left margin {lay['left_margin_in']}"
+        )
+        # Height: same idea vertically.
+        used_height = (
+            lay["top_margin_in"] + lay["row_pitch_in"] * (lay["rows"] - 1) + lay["label_height_in"]
+        )
+        bottom_margin = 11.0 - used_height
+        assert abs(bottom_margin - lay["top_margin_in"]) < 1e-6, (
+            f"{key}: bottom margin {bottom_margin} != top margin {lay['top_margin_in']}"
+        )
+        # rows * cols == labels_per_sheet.
+        assert lay["rows"] * lay["cols"] == lay["labels_per_sheet"], key
+
+
+def test_resolve_layout_accepts_aliases_and_rejects_unknown() -> None:
+    from fastapi import HTTPException
+
+    from mailtrace.routes.pieces import resolve_layout
+
+    # Primary keys.
+    assert resolve_layout("5163")["model"] == "5163"
+    assert resolve_layout("5161")["model"] == "5161"
+    assert resolve_layout("5162")["model"] == "5162"
+    # Sister model numbers route to the same layout.
+    assert resolve_layout("8163")["model"] == "5163"
+    assert resolve_layout("5263")["model"] == "5163"
+    assert resolve_layout("8161")["model"] == "5161"
+    # Whitespace tolerated.
+    assert resolve_layout("  5163  ")["model"] == "5163"
+    # Unknown → 400.
+    try:
+        resolve_layout("9999")
+    except HTTPException as e:
+        assert e.status_code == 400
+    else:
+        raise AssertionError("expected HTTPException for unknown model")
+
+
+def test_sheet_allocator_5161_and_5162_geometry() -> None:
+    """Smoke test that 5161 (10x2, 1" tall) and 5162 (7x2, 1 1/3" tall)
+    place the first cell at the right (top, left)."""
+    from mailtrace.routes.pieces import AVERY_LAYOUTS, _allocate_sheet
+
+    class _Stub:
+        id = 0
+        imb_letters = ""
+        recipient_block = ""
+
+        def human_readable_imb(self) -> str:
+            return ""
+
+    # 5161: row 1 col 1 → top=0.5, left=0.15625
+    pages = _allocate_sheet([_Stub()], layout=AVERY_LAYOUTS["5161"], start_row=1, start_col=1)  # type: ignore[arg-type]
+    assert abs(pages[0][0]["top_in"] - 0.5) < 1e-6
+    assert abs(pages[0][0]["left_in"] - 0.15625) < 1e-6
+
+    # 5162: row 2 col 1 → top = 5/6 + 4/3 = 2.1666…, left = 0.15625
+    pages = _allocate_sheet([_Stub()], layout=AVERY_LAYOUTS["5162"], start_row=2, start_col=1)  # type: ignore[arg-type]
+    assert abs(pages[0][0]["top_in"] - (5.0 / 6.0 + 4.0 / 3.0)) < 1e-6
+    assert abs(pages[0][0]["left_in"] - 0.15625) < 1e-6
+
+
+def test_sheet_allocator_5161_paginates_at_20() -> None:
+    """5161 holds 20 labels per page (10 rows * 2 cols)."""
+    from mailtrace.routes.pieces import AVERY_LAYOUTS, _allocate_sheet
+
+    class _Stub:
+        def __init__(self, n: int) -> None:
+            self.id = n
+            self.imb_letters = ""
+            self.recipient_block = ""
+
+        def human_readable_imb(self) -> str:
+            return ""
+
+    pages = _allocate_sheet(
+        [_Stub(i) for i in range(45)],  # type: ignore[arg-type]
+        layout=AVERY_LAYOUTS["5161"],
+        start_row=1,
+        start_col=1,
+    )
+    # 20 + 20 + 5 = 45 across 3 pages.
+    assert [len(p) for p in pages] == [20, 20, 5]

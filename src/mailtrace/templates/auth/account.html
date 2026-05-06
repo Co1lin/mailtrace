@@ -161,7 +161,45 @@
 </div>
 
 <div class="card">
-    <h2>4 · Email notifications</h2>
+    <h2>4 · Time zone <small>(used for emails &amp; other out-of-band rendering)</small></h2>
+    <p class="lede">The web pages always show timestamps in your <em>browser's</em>
+       timezone (no setting needed). This field is only consulted when the
+       platform sends you something the browser can't localize for you —
+       most commonly, scan-update <strong>emails</strong>.</p>
+    <p class="lede"><small>On first login, your browser's timezone is captured
+       automatically. You can override it here at any time. Leave blank to
+       fall back to UTC in emails.</small></p>
+    <label>IANA time zone name <small>(e.g. <code>America/New_York</code>, <code>Asia/Shanghai</code>, <code>Europe/London</code>)</small></label>
+    <input type="text" name="timezone" id="account-tz-input"
+           value="{{ user.timezone or '' }}"
+           list="account-tz-options"
+           placeholder="auto-detect on next page load if left blank">
+    <datalist id="account-tz-options">
+        {% for tz in timezone_options %}<option value="{{ tz }}">{% endfor %}
+    </datalist>
+    {% if user.timezone %}
+    <p><small>Currently saved: <code>{{ user.timezone }}</code>.
+       Browser detected: <span id="account-tz-browser-detected">…</span></small></p>
+    {% else %}
+    <p><small>No timezone saved yet. Browser detected:
+       <span id="account-tz-browser-detected">…</span>
+       (will be saved automatically the next time you load any page,
+       unless you set it explicitly above first.)</small></p>
+    {% endif %}
+    <script>
+        (function () {
+            const el = document.getElementById("account-tz-browser-detected");
+            if (!el) return;
+            try {
+                const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                el.textContent = tz || "(unknown)";
+            } catch (_) { el.textContent = "(no Intl support)"; }
+        })();
+    </script>
+</div>
+
+<div class="card">
+    <h2>5 · Email notifications</h2>
     <p class="lede">When new scans arrive on your pieces, the platform
        can send you a digest. SMTP is configured by the platform admin
        at <code>/admin/email</code>; if it's not set up, this toggle has

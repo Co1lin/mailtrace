@@ -48,7 +48,7 @@
             </td>
             <td>{{ u.mailer_id or '—' }}</td>
             <td>{{ 'active' if u.is_active else 'inactive' }}</td>
-            <td>{{ u.last_login_at.strftime('%Y-%m-%d %H:%M') if u.last_login_at else '—' }}</td>
+            <td>{% if u.last_login_at %}<time data-utc="{{ u.last_login_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ u.last_login_at.strftime('%Y-%m-%d %H:%M') }}</time>{% else %}—{% endif %}</td>
             <td>
                 <a href="/admin/users/{{ u.id }}/edit">Edit</a>
                 <form method="POST" action="/admin/users/{{ u.id }}/force-reset" style="display:inline">

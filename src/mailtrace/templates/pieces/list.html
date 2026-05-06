@@ -49,12 +49,12 @@
     {% for p in pieces %}
     <tr>
         <td><input type="checkbox" name="ids" value="{{ p.id }}"></td>
-        <td><a href="/pieces/{{ p.id }}">{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</a></td>
+        <td><a href="/pieces/{{ p.id }}"><time data-utc="{{ p.created_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</time></a></td>
         <td>{{ p.label or '—' }}</td>
         <td>{{ p.recipient_block.split('\n')[0] if p.recipient_block else '—' }}</td>
         <td><span class="pill">{{ p.status }}</span></td>
         <td><code>{{ p.human_readable_imb() }}</code></td>
-        <td>{{ p.last_polled_at.strftime('%Y-%m-%d %H:%M') if p.last_polled_at else '—' }}</td>
+        <td>{% if p.last_polled_at %}<time data-utc="{{ p.last_polled_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ p.last_polled_at.strftime('%Y-%m-%d %H:%M') }}</time>{% else %}—{% endif %}</td>
     </tr>
     {% endfor %}
     </tbody>

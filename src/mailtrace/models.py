@@ -72,6 +72,13 @@ class User(Base):
     notify_on_scans: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     notify_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
 
+    # IANA timezone name (e.g. "America/New_York"). Auto-captured from the
+    # browser on first page load when null, editable on /auth/account, and
+    # used to format any timestamp we send out-of-band (emails, etc.) where
+    # the browser can't localize for us. The web UI ignores this field —
+    # it always uses the live browser timezone via <time data-utc> JS.
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     addresses: Mapped[list[Address]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )

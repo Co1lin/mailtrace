@@ -14,13 +14,14 @@
     <p><strong>IMb:</strong> <code>{{ piece.human_readable_imb() }}</code></p>
     <p><strong>Lookup key:</strong> <code>{{ piece.imb_raw }}</code>
        (<small>{{ 'with' if piece.include_zip_in_imb else 'without' }} ZIP</small>)</p>
-    <p><strong>Created:</strong> {{ piece.created_at.strftime('%Y-%m-%d %H:%M %Z') }}
-       {%- if piece.printed_at %} · <strong>Printed:</strong> {{ piece.printed_at.strftime('%Y-%m-%d %H:%M %Z') }}{% endif -%}
-       {%- if piece.mailed_at %} · <strong>Mailed:</strong> {{ piece.mailed_at.strftime('%Y-%m-%d %H:%M %Z') }}{% endif %}
+    <p><strong>Created:</strong>
+       <time data-utc="{{ piece.created_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}" data-fmt="datetime-tz">{{ piece.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</time>
+       {%- if piece.printed_at %} · <strong>Printed:</strong> <time data-utc="{{ piece.printed_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}" data-fmt="datetime-tz">{{ piece.printed_at.strftime('%Y-%m-%d %H:%M UTC') }}</time>{% endif -%}
+       {%- if piece.mailed_at %} · <strong>Mailed:</strong> <time data-utc="{{ piece.mailed_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}" data-fmt="datetime-tz">{{ piece.mailed_at.strftime('%Y-%m-%d %H:%M UTC') }}</time>{% endif %}
     </p>
     <p><strong>Last polled:</strong>
-       {{ piece.last_polled_at.strftime('%Y-%m-%d %H:%M %Z') if piece.last_polled_at else '—' }}
-       (next at {{ piece.next_poll_at.strftime('%Y-%m-%d %H:%M %Z') if piece.next_poll_at else 'never' }})
+       {% if piece.last_polled_at %}<time data-utc="{{ piece.last_polled_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}" data-fmt="datetime-tz">{{ piece.last_polled_at.strftime('%Y-%m-%d %H:%M UTC') }}</time>{% else %}—{% endif %}
+       (next at {% if piece.next_poll_at %}<time data-utc="{{ piece.next_poll_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}" data-fmt="datetime-tz">{{ piece.next_poll_at.strftime('%Y-%m-%d %H:%M UTC') }}</time>{% else %}never{% endif %})
     </p>
     {% if not piece.archived_at and piece.status in ('generated', 'printed') %}
     <p>
@@ -82,7 +83,7 @@
         <tbody>
         {% for s in piece.scans %}
         <tr>
-            <td>{{ s.scanned_at.strftime('%Y-%m-%d %H:%M') if s.scanned_at else '—' }}</td>
+            <td>{% if s.scanned_at %}<time data-utc="{{ s.scanned_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ s.scanned_at.strftime('%Y-%m-%d %H:%M') }}</time>{% else %}—{% endif %}</td>
             <td>{{ s.event_code or '—' }}</td>
             <td>{{ s.handling_event_type or '—' }}</td>
             <td>{{ s.mail_phase or '—' }}</td>

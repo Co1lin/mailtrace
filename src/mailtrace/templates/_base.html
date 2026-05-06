@@ -76,15 +76,28 @@
 // the user's browser-local timezone. Server templates emit the UTC
 // timestamp as a stable fallback (text content) plus the data-utc
 // attribute for in-browser conversion. Format hint via data-fmt:
-//   "datetime" (default) → "YYYY-MM-DD HH:mm" local
-//   "date"               → "YYYY-MM-DD" local
-//   "long"               → toLocaleString() with the browser's defaults
+//   "datetime"    (default) → "YYYY-MM-DD HH:mm" local
+//   "date"                  → "YYYY-MM-DD" local
+//   "datetime-tz"           → "YYYY-MM-DD HH:mm Z" local (Z = short TZ name)
+//   "long"                  → toLocaleString() with the browser's defaults
 function _pad(n) { return String(n).padStart(2, "0"); }
+function _shortTzName(d) {
+    try {
+        const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(d);
+        const tz = parts.find(function (p) { return p.type === "timeZoneName"; });
+        return tz ? tz.value : "";
+    } catch (_) { return ""; }
+}
 function _localFormat(d, fmt) {
     if (fmt === "long") return d.toLocaleString();
     const ymd = `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}`;
     if (fmt === "date") return ymd;
-    return `${ymd} ${_pad(d.getHours())}:${_pad(d.getMinutes())}`;
+    const hm = `${_pad(d.getHours())}:${_pad(d.getMinutes())}`;
+    if (fmt === "datetime-tz") {
+        const tz = _shortTzName(d);
+        return tz ? `${ymd} ${hm} ${tz}` : `${ymd} ${hm}`;
+    }
+    return `${ymd} ${hm}`;
 }
 document.querySelectorAll("time[data-utc]").forEach(function (el) {
     const iso = el.getAttribute("data-utc");
@@ -93,6 +106,24 @@ document.querySelectorAll("time[data-utc]").forEach(function (el) {
     el.textContent = _localFormat(d, el.getAttribute("data-fmt") || "datetime");
     el.setAttribute("title", d.toString());
 });
+{% if user is defined and user and not user.timezone %}
+// Auto-capture browser timezone the first time a logged-in user with no
+// stored timezone loads any page. Used only for out-of-band rendering
+// (emails). The web UI already localizes via the <time> JS above.
+(function () {
+    try {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (!tz) return;
+        const body = "tz=" + encodeURIComponent(tz);
+        fetch("/auth/timezone-init", {
+            method: "POST",
+            headers: {"Content-Type": "application/x-www-form-urlencoded"},
+            body: body,
+            credentials: "same-origin",
+        }).catch(function () { /* best-effort; user can set it manually */ });
+    } catch (_) { /* no Intl support; user can set it manually */ }
+})();
+{% endif %}
 </script>
 </body>
 </html>

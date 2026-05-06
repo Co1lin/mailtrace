@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Avery 8163 label</title>
+    <title>{{ layout.name }} label</title>
 <style>
 * { box-sizing: border-box; }
 body { margin: 0; }
@@ -15,24 +15,37 @@ body { margin: 0; }
 .page {
     width: 8.5in;
     height: 11in;
-    padding: 0.5in 0;
+    padding: 0;
     page-break-after: always;
     position: relative;
 }
-.label {
-    width: 4in;
-    height: 2in;
-    position: absolute;
-    padding: 0.1in;
-}
-.usps-barcode { font-family: "USPSIMBStandard"; font-size: 16pt; margin-bottom: 0.1in; }
-.barcode-humanreadable { font-size: 10pt; }
+.label { position: absolute; overflow: hidden; }
+.usps-barcode { font-family: "USPSIMBStandard"; }
 .recipient-text { font-family: "DejaVu Serif", serif; white-space: pre-line; }
+
+.label-5163 { padding: 0.1in; }
+.label-5163 .usps-barcode { font-size: 16pt; margin-bottom: 0.05in; }
+.label-5163 .barcode-humanreadable { font-size: 9pt; }
+.label-5163 .recipient-text { font-size: 11pt; }
+
+.label-5162 { padding: 0.08in; }
+.label-5162 .usps-barcode { font-size: 16pt; margin-bottom: 0.03in; }
+.label-5162 .barcode-humanreadable { font-size: 8pt; }
+.label-5162 .recipient-text { font-size: 10pt; }
+
+.label-5161 { padding: 0.06in; }
+.label-5161 .usps-barcode { font-size: 14pt; margin-bottom: 0.02in; }
+.label-5161 .barcode-humanreadable { display: none; }
+.label-5161 .recipient-text { font-size: 8.5pt; line-height: 1.15; }
 </style>
 </head>
 <body>
     <div class="page">
-        <div class="label" style="top: {{ (row - 1) * 2 + 0.5 }}in; left: {{ (col - 1) * 4.25 + 0.2 }}in;">
+        <div class="label {{ layout.css_class }}"
+             style="top: {{ '%.4f'|format(layout.top_margin_in + (row - 1) * layout.row_pitch_in) }}in;
+                    left: {{ '%.4f'|format(layout.left_margin_in + (col - 1) * layout.col_pitch_in) }}in;
+                    width: {{ layout.label_width_in }}in;
+                    height: {{ '%.4f'|format(layout.label_height_in) }}in;">
             <div class="usps-barcode">{{ barcode }}</div>
             <div class="barcode-humanreadable">{{ human_readable_bar }}</div>
             <div class="recipient-text">{{ recipient_address }}</div>

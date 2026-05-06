@@ -1311,6 +1311,238 @@ async def test_account_test_notify_without_smtp_config(
     assert "configured SMTP" in page.text
 
 
+# ---------------------------------------------------------------------------
+# Per-user timezone (auto-detect on first load + manual edit on /auth/account)
+# ---------------------------------------------------------------------------
+
+
+async def test_account_form_renders_timezone_field_and_datalist(
+    client: AsyncClient,
+) -> None:
+    page = await client.get("/auth/account")
+    assert page.status_code == 200
+    assert 'name="timezone"' in page.text
+    assert 'id="account-tz-options"' in page.text
+    # A handful of well-known IANA names should appear in the datalist.
+    assert "America/New_York" in page.text
+    assert "Asia/Shanghai" in page.text
+
+
+async def test_account_save_persists_valid_timezone(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    resp = await client.post(
+        "/auth/account",
+        data={
+            "mailer_id": "1",
+            "barcode_id": "0",
+            "service_type_id": "40",
+            "timezone": "America/New_York",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    async with db_sessionmaker() as db:
+        u = await db.get(User, regular_user.id)
+        assert u is not None
+        assert u.timezone == "America/New_York"
+
+
+async def test_account_save_rejects_invalid_timezone(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    resp = await client.post(
+        "/auth/account",
+        data={
+            "mailer_id": "1",
+            "barcode_id": "0",
+            "service_type_id": "40",
+            "timezone": "Mars/Olympus_Mons",
+        },
+    )
+    assert resp.status_code == 400
+    assert "Unknown timezone" in resp.text
+    async with db_sessionmaker() as db:
+        u = await db.get(User, regular_user.id)
+        assert u is not None
+        assert u.timezone is None  # nothing saved
+
+
+async def test_account_save_blank_timezone_clears_it(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """Submitting an empty timezone clears the saved value (back to UTC
+    fallback for emails) — useful for users who travel and want to opt
+    out of the auto-detect behavior temporarily."""
+    # Seed a value first.
+    await client.post(
+        "/auth/account",
+        data={
+            "mailer_id": "1",
+            "barcode_id": "0",
+            "service_type_id": "40",
+            "timezone": "Europe/London",
+        },
+    )
+    # Then save with timezone="" → cleared.
+    await client.post(
+        "/auth/account",
+        data={
+            "mailer_id": "1",
+            "barcode_id": "0",
+            "service_type_id": "40",
+            "timezone": "",
+        },
+    )
+    async with db_sessionmaker() as db:
+        u = await db.get(User, regular_user.id)
+        assert u is not None
+        assert u.timezone is None
+
+
+async def test_timezone_init_saves_when_unset(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """First-load auto-capture endpoint stores a valid IANA tz when the
+    user has none saved. Replaces the otherwise-required manual setup."""
+    # Confirm baseline.
+    async with db_sessionmaker() as db:
+        u = await db.get(User, regular_user.id)
+        assert u is not None and u.timezone is None
+
+    resp = await client.post(
+        "/auth/timezone-init",
+        data={"tz": "Asia/Shanghai"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["saved"] is True
+    assert body["timezone"] == "Asia/Shanghai"
+
+    async with db_sessionmaker() as db:
+        u = await db.get(User, regular_user.id)
+        assert u is not None
+        assert u.timezone == "Asia/Shanghai"
+
+
+async def test_timezone_init_does_not_overwrite_existing(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """If the user explicitly set a timezone (e.g. on the account page),
+    a stale browser tab's auto-detect must NOT clobber it. We protect
+    that with the early-return on `if user.timezone`."""
+    # Seed an explicit choice via the account page.
+    await client.post(
+        "/auth/account",
+        data={
+            "mailer_id": "1",
+            "barcode_id": "0",
+            "service_type_id": "40",
+            "timezone": "Europe/Berlin",
+        },
+    )
+    # Auto-detect tries to set a different one.
+    resp = await client.post(
+        "/auth/timezone-init",
+        data={"tz": "America/Los_Angeles"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["saved"] is False
+    async with db_sessionmaker() as db:
+        u = await db.get(User, regular_user.id)
+        assert u is not None
+        assert u.timezone == "Europe/Berlin"
+
+
+async def test_timezone_init_rejects_invalid_tz(client: AsyncClient) -> None:
+    resp = await client.post("/auth/timezone-init", data={"tz": "Not/A_Zone"})
+    assert resp.status_code == 400
+    assert "invalid" in resp.json()["reason"].lower()
+
+
+async def test_timezone_init_requires_login(anon_client: AsyncClient) -> None:
+    resp = await anon_client.post("/auth/timezone-init", data={"tz": "UTC"})
+    # Auth middleware bounces unauthenticated POSTs to login (303) for HTML
+    # endpoints; for an API endpoint that returns JSON, the middleware may
+    # still redirect — accept either 303 (redirect to login) or 401 (the
+    # handler's own check) as "rejected".
+    assert resp.status_code in (303, 401)
+
+
+async def test_base_template_auto_detect_script_renders_only_when_tz_unset(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """The auto-detect <script> block is gated on `not user.timezone` so
+    it stops POSTing once the user has any value saved (manual or
+    auto-captured). Verify both states."""
+    # Initially user.timezone is None → script present.
+    page = await client.get("/")
+    assert page.status_code == 200
+    assert "/auth/timezone-init" in page.text
+
+    # Set the timezone, then re-fetch.
+    await client.post(
+        "/auth/account",
+        data={
+            "mailer_id": "1",
+            "barcode_id": "0",
+            "service_type_id": "40",
+            "timezone": "America/New_York",
+        },
+    )
+    page2 = await client.get("/")
+    assert page2.status_code == 200
+    assert "/auth/timezone-init" not in page2.text
+
+
+async def test_pieces_list_emits_data_utc_for_browser_localization(
+    client: AsyncClient,
+) -> None:
+    """The pieces table's Created column must be wrapped in <time data-utc>
+    so the base-template JS can convert UTC timestamps to the browser's
+    local time. Regression test for the original 'pieces page shows UTC'
+    bug — without data-utc, the JS no-ops and the user sees server UTC."""
+    # Seed one piece so the table renders.
+    await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    page = await client.get("/pieces/")
+    assert page.status_code == 200
+    # The created_at cell should now carry the data-utc attribute.
+    assert "<time data-utc=" in page.text
+
+
+def test_resolve_user_tz_falls_back_to_utc_on_invalid_or_missing() -> None:
+    """The email digest must NEVER raise on a stale/invalid timezone
+    string — UTC is always a safe fallback, since any datetime can be
+    formatted in UTC."""
+    import datetime as _dt
+
+    from mailtrace.models import User as _User
+    from mailtrace.services import _resolve_user_tz
+
+    u_none = _User(email="x", password_hash="x", timezone=None)
+    u_bad = _User(email="x", password_hash="x", timezone="Not/Real_Zone")
+    u_ok = _User(email="x", password_hash="x", timezone="America/New_York")
+    assert _resolve_user_tz(u_none) is _dt.UTC
+    assert _resolve_user_tz(u_bad) is _dt.UTC
+    # ZoneInfo identity is implementation-defined; check it formats correctly.
+    sample = _dt.datetime(2025, 1, 1, 12, 0, tzinfo=_dt.UTC)
+    assert sample.astimezone(_resolve_user_tz(u_ok)).hour == 7  # NYC = UTC-5 in Jan
+
+
 async def test_validate_address_uses_current_user_creds(
     client: AsyncClient,
     db_sessionmaker: async_sessionmaker,
@@ -1601,9 +1833,11 @@ async def test_sticker_sheet_renders_html(
     )
     assert sheet.status_code == 200
     assert "USPSIMBStandard" in sheet.text
-    # First piece is at row 2, col 2 → top = 0.5 + 1*2 = 2.5in, left = 0.2 + 1*4.25 = 4.45in
-    assert "top: 2.500in" in sheet.text
-    assert "left: 4.450in" in sheet.text
+    # First piece is at row 2, col 2 on Avery 5163 spec geometry:
+    #   top  = 0.5    + 1 * 2.0    = 2.5in
+    #   left = 5/32"  + 1 * 4.1875 = 4.34375in   (5/32 = 0.15625)
+    assert "top: 2.5000in" in sheet.text
+    assert "left: 4.3438in" in sheet.text
 
 
 async def test_sticker_sheet_paginates_when_overflow(
@@ -1681,6 +1915,192 @@ async def test_sticker_sheet_rejects_other_users_pieces(
         )
         assert sheet.status_code == 404
     await redis.aclose()
+
+
+async def test_sticker_sheet_setup_includes_recent_selector(
+    client: AsyncClient,
+) -> None:
+    """The sheet setup page must expose a 'Select last 10 min' button and
+    emit data-created-at attributes on the piece checkboxes — the JS
+    selector relies on both."""
+    # Need at least one piece so the table actually renders.
+    await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    page = await client.get("/pieces/sheet/setup")
+    assert page.status_code == 200
+    assert "Select last 10 min" in page.text
+    assert "selectRecentPieces" in page.text
+    assert "data-created-at=" in page.text
+
+
+async def test_sticker_sheet_setup_lists_all_layouts(client: AsyncClient) -> None:
+    """The setup page should expose every supported Avery layout in the
+    selector, including alias model numbers so users picking 8163 land on
+    the 5163 entry."""
+    page = await client.get("/pieces/sheet/setup")
+    assert page.status_code == 200
+    # All three primary models present.
+    for model in ("5163", "5162", "5161"):
+        assert f"Avery {model}" in page.text, f"expected Avery {model} in dropdown"
+    # Sister numbers surfaced as aliases on the 5163 entry.
+    assert "8163" in page.text
+    assert "5263" in page.text
+
+
+async def test_sticker_sheet_renders_5161(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """Submitting layout=5161 should use the 4x1 layout: row 1 col 1
+    starts at (top=0.5in, left=0.15625in) and the page holds 20 labels."""
+    pids = []
+    for i in range(3):
+        resp = await client.post(
+            "/pieces/new",
+            data={
+                "label": f"p{i}",
+                "recipient_name": "Bob",
+                "recipient_street": "200 Market St",
+                "recipient_city": "Sometown",
+                "recipient_state": "CA",
+                "recipient_zip": "94105",
+                "include_zip_in_imb": "true",
+            },
+            follow_redirects=False,
+        )
+        pids.append(int(resp.headers["location"].rsplit("/", 1)[-1]))
+
+    sheet = await client.post(
+        "/pieces/sheet",
+        data={
+            "ids": [str(p) for p in pids],
+            "start_row": "1",
+            "start_col": "1",
+            "doc_type": "html",
+            "layout": "5161",
+        },
+    )
+    assert sheet.status_code == 200
+    # 5161 css class is applied — variant-specific font sizes kick in.
+    assert "label-5161" in sheet.text
+    # First cell at (0.5, 0.15625), second cell same row col 2 at left = 0.15625 + 4.1875 = 4.34375.
+    assert "top: 0.5000in" in sheet.text
+    # 0.15625 → "0.1562" because Python's %.4f rounds half-to-even (2 is even).
+    assert "left: 0.1562in" in sheet.text
+
+
+async def test_sticker_sheet_resolves_alias_8163_to_5163(
+    client: AsyncClient,
+) -> None:
+    """layout=8163 is a sister model number for 5163 and must produce
+    the same geometry."""
+    resp = await client.post(
+        "/pieces/new",
+        data={
+            "label": "alias-test",
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    pid = int(resp.headers["location"].rsplit("/", 1)[-1])
+    sheet = await client.post(
+        "/pieces/sheet",
+        data={
+            "ids": [str(pid)],
+            "start_row": "1",
+            "start_col": "1",
+            "doc_type": "html",
+            "layout": "8163",
+        },
+    )
+    assert sheet.status_code == 200
+    # 8163 → 5163 layout, so the css class is label-5163.
+    assert "label-5163" in sheet.text
+
+
+async def test_sticker_sheet_rejects_unknown_layout(client: AsyncClient) -> None:
+    resp = await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    pid = int(resp.headers["location"].rsplit("/", 1)[-1])
+    sheet = await client.post(
+        "/pieces/sheet",
+        data={
+            "ids": [str(pid)],
+            "start_row": "1",
+            "start_col": "1",
+            "doc_type": "html",
+            "layout": "9999",
+        },
+    )
+    assert sheet.status_code == 400
+
+
+async def test_sticker_sheet_rejects_start_row_exceeding_layout(
+    client: AsyncClient,
+) -> None:
+    """5163 has 5 rows; start_row=8 must 400 even though it would be
+    valid on 5161 (which has 10 rows). Same input → different verdict
+    based on layout choice."""
+    resp = await client.post(
+        "/pieces/new",
+        data={
+            "recipient_name": "Bob",
+            "recipient_street": "200 Market St",
+            "recipient_city": "Sometown",
+            "recipient_state": "CA",
+            "recipient_zip": "94105",
+            "include_zip_in_imb": "true",
+        },
+        follow_redirects=False,
+    )
+    pid = int(resp.headers["location"].rsplit("/", 1)[-1])
+    too_high = await client.post(
+        "/pieces/sheet",
+        data={
+            "ids": [str(pid)],
+            "start_row": "8",
+            "start_col": "1",
+            "doc_type": "html",
+            "layout": "5163",
+        },
+    )
+    assert too_high.status_code == 400
+    # Same start_row on 5161 (which has 10 rows) is fine.
+    ok = await client.post(
+        "/pieces/sheet",
+        data={
+            "ids": [str(pid)],
+            "start_row": "8",
+            "start_col": "1",
+            "doc_type": "html",
+            "layout": "5161",
+        },
+    )
+    assert ok.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -2056,6 +2476,219 @@ async def test_batch_count_clamped_to_limit(
     # Only one row, and it errored → 400 page re-render.
     assert resp.status_code == 400
     assert "exceeds per-row limit" in resp.text
+
+
+async def test_batch_interleaves_copies_across_recipients(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """Counts [3, 2, 4] across 3 recipients should produce pieces in
+    round-robin order (A, B, C, A, B, C, A, C, C) so a single sticker
+    sheet covers all recipients early. Verifies the interleave is
+    based on creation/serial order."""
+    from mailtrace.models import Address
+
+    async with db_sessionmaker() as db:
+        addrs = [
+            Address(user_id=regular_user.id, label=lbl, role="recipient", zip="94105")
+            for lbl in ("alice", "bob", "carol")
+        ]
+        for a in addrs:
+            db.add(a)
+        await db.commit()
+        for a in addrs:
+            await db.refresh(a)
+        a_id, b_id, c_id = addrs[0].id, addrs[1].id, addrs[2].id
+
+    resp = await client.post(
+        "/pieces/batch",
+        data={
+            "row-0-recipient_id": str(a_id),
+            "row-0-count": "3",
+            "row-0-include_zip": "on",
+            "row-1-recipient_id": str(b_id),
+            "row-1-count": "2",
+            "row-1-include_zip": "on",
+            "row-2-recipient_id": str(c_id),
+            "row-2-count": "4",
+            "row-2-include_zip": "on",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        # 3 + 2 + 4 = 9 pieces in round-robin order.
+        assert len(rows) == 9
+        # Map each piece's recipient_address_id to a letter for legibility.
+        letters = {a_id: "A", b_id: "B", c_id: "C"}
+        order = "".join(letters[p.recipient_address_id] for p in rows)
+        # Round 0: A B C, round 1: A B C, round 2: A C, round 3: C
+        # → "ABCABCACC"
+        assert order == "ABCABCACC", f"interleave wrong: {order}"
+
+
+async def test_batch_default_count_applied_when_per_row_blank(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """A row with blank Count should use the form-level default_count.
+    A row with explicit Count should override it (more or fewer)."""
+    from mailtrace.models import Address
+
+    async with db_sessionmaker() as db:
+        addrs = [
+            Address(user_id=regular_user.id, label=lbl, role="recipient", zip="94105")
+            for lbl in ("alice", "bob")
+        ]
+        for a in addrs:
+            db.add(a)
+        await db.commit()
+        for a in addrs:
+            await db.refresh(a)
+        a_id, b_id = addrs[0].id, addrs[1].id
+
+    resp = await client.post(
+        "/pieces/batch",
+        data={
+            "default_count": "3",
+            "row-0-recipient_id": str(a_id),
+            # row-0-count is blank → uses default 3
+            "row-0-include_zip": "on",
+            "row-1-recipient_id": str(b_id),
+            "row-1-count": "1",  # overrides default
+            "row-1-include_zip": "on",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        # alice gets 3 (default), bob gets 1 (override) → 4 total interleaved ABABAA wait,
+        # round 0: A B, round 1: A, round 2: A → ABAA
+        assert len(rows) == 4
+        letters = {a_id: "A", b_id: "B"}
+        order = "".join(letters[p.recipient_address_id] for p in rows)
+        assert order == "ABAA", f"default_count interleave wrong: {order}"
+
+
+async def test_batch_zero_count_skips_row(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """Per-row Count of 0 should skip that row entirely, even with a
+    non-zero default_count — explicit 0 means 'don't print this one'."""
+    from mailtrace.models import Address
+
+    async with db_sessionmaker() as db:
+        addrs = [
+            Address(user_id=regular_user.id, label=lbl, role="recipient", zip="94105")
+            for lbl in ("alice", "bob")
+        ]
+        for a in addrs:
+            db.add(a)
+        await db.commit()
+        for a in addrs:
+            await db.refresh(a)
+        a_id, b_id = addrs[0].id, addrs[1].id
+
+    resp = await client.post(
+        "/pieces/batch",
+        data={
+            "default_count": "2",
+            "row-0-recipient_id": str(a_id),
+            "row-0-count": "0",  # explicit skip
+            "row-0-include_zip": "on",
+            "row-1-recipient_id": str(b_id),
+            # row-1-count blank → uses default 2
+            "row-1-include_zip": "on",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        # Only bob, 2 copies.
+        assert len(rows) == 2
+        assert all(p.recipient_address_id == b_id for p in rows)
+
+
+async def test_batch_blank_recipient_rows_silently_skipped(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """Submitting many rows with most empty (no recipient picked) should
+    just create from the populated ones, not error — the user added extra
+    rows via '+ Add row' but didn't fill them."""
+    from mailtrace.models import Address
+
+    async with db_sessionmaker() as db:
+        a = Address(user_id=regular_user.id, label="alice", role="recipient", zip="94105")
+        db.add(a)
+        await db.commit()
+        await db.refresh(a)
+        a_id = a.id
+
+    # 8 rows, only row-2 populated.
+    data: dict[str, str] = {"default_count": "1"}
+    for i in range(8):
+        data[f"row-{i}-include_zip"] = "on"
+    data["row-2-recipient_id"] = str(a_id)
+    data["row-2-count"] = "2"
+
+    resp = await client.post("/pieces/batch", data=data, follow_redirects=False)
+    assert resp.status_code == 303
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        assert len(rows) == 2
+
+
+async def test_batch_total_cap_rejects_oversize_submission(
+    client: AsyncClient, db_sessionmaker: async_sessionmaker, regular_user: User
+) -> None:
+    """Even when each row is under the per-row 50 cap, the cumulative
+    total across rows is capped at _BATCH_TOTAL_LIMIT (500)."""
+    from mailtrace.models import Address
+
+    async with db_sessionmaker() as db:
+        addrs = [
+            Address(user_id=regular_user.id, label=f"a{i}", role="recipient", zip="94105")
+            for i in range(15)
+        ]
+        for a in addrs:
+            db.add(a)
+        await db.commit()
+        for a in addrs:
+            await db.refresh(a)
+        ids = [a.id for a in addrs]
+
+    # 15 rows * 50 each = 750, well over the 500 cap.
+    data: dict[str, str] = {}
+    for i, aid in enumerate(ids):
+        data[f"row-{i}-recipient_id"] = str(aid)
+        data[f"row-{i}-count"] = "50"
+        data[f"row-{i}-include_zip"] = "on"
+    resp = await client.post("/pieces/batch", data=data)
+    assert resp.status_code == 400
+    assert "exceeds per-submission limit" in resp.text
+    # Nothing got committed.
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select_all_user_pieces(regular_user.id))).scalars().all())
+        assert rows == []
+
+
+async def test_batch_form_renders_global_default_field_and_add_row_button(
+    client: AsyncClient,
+) -> None:
+    """The batch form template must expose: a default_count input, a
+    '+ Add row' control, and at least the initial _BATCH_INITIAL_ROWS
+    rows (so the user doesn't have to click 'Add' just to fill 6 entries)."""
+    page = await client.get("/pieces/batch")
+    assert page.status_code == 200
+    assert 'name="default_count"' in page.text
+    assert 'id="add-row-btn"' in page.text
+    # The initial row count should be at least 6 — verify by counting row-N-recipient_id inputs.
+    # (Counts the unique row indices in the rendered form.)
+    import re
+
+    indices = {int(m.group(1)) for m in re.finditer(r'name="row-(\d+)-recipient_id"', page.text)}
+    assert max(indices) >= 5, f"expected ≥6 initial rows, got indices {indices}"
 
 
 async def test_batch_mark_as_mailed_form_flag(

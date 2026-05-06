@@ -6,18 +6,33 @@
    They land in <strong>Stock</strong> state (no polling). Print them onto sticker
    sheets, peel-and-stick to envelopes as you go, then click <em>Mark mailed</em> on
    the piece (or in bulk) when you actually drop one in the box.</p>
+<p class="lede"><strong>Order:</strong> if a row's Count &gt; 1, copies are
+   <strong>interleaved</strong> across rows (A, B, C, A, B, C…) instead of
+   stacked (A, A, …, B, B, …). That way a single sticker sheet ends up with
+   all your recipients — no more carrying ten pages just to mail to ten
+   different people.</p>
 {% if error %}<p class="err">{{ error }}</p>{% endif %}
 
 <div class="card">
 <form method="POST" action="/pieces/batch">
-<table>
+<p>
+    <label>Default copies per recipient
+        <input type="number" name="default_count" value="{{ default_count or 1 }}"
+               min="0" max="{{ batch_count_limit }}" style="width:5em">
+    </label>
+    <small>Used when a row's <em>Count</em> is left blank. Per-row Count
+       overrides this — set 0 to skip a row, or a higher number to print
+       extra copies of that one recipient.</small>
+</p>
+<table id="batch-table">
     <thead><tr>
-        <th>#</th><th>Label</th><th>Sender</th><th>Recipient</th><th>Count</th><th>ZIP-in-IMb</th>
+        <th>#</th><th>Label</th><th>Sender</th><th>Recipient</th>
+        <th>Count <small>(blank = default)</small></th><th>ZIP-in-IMb</th>
     </tr></thead>
-    <tbody>
+    <tbody id="batch-rows">
     {% for i in range(row_count) %}
-    <tr>
-        <td>{{ i + 1 }}</td>
+    <tr class="batch-row">
+        <td class="row-num">{{ i + 1 }}</td>
         <td><input type="text" name="row-{{ i }}-label" maxlength="80" placeholder="optional"></td>
         <td>
             <select name="row-{{ i }}-sender_id">
@@ -35,7 +50,8 @@
                 {% endfor %}
             </select>
         </td>
-        <td><input type="number" name="row-{{ i }}-count" min="1" max="50" value="1" style="width:5em"></td>
+        <td><input type="number" name="row-{{ i }}-count" min="0" max="{{ batch_count_limit }}"
+                   placeholder="default" style="width:5em"></td>
         <td style="text-align:center">
             <input type="checkbox" name="row-{{ i }}-include_zip" value="on" checked>
         </td>
@@ -43,6 +59,10 @@
     {% endfor %}
     </tbody>
 </table>
+<p>
+    <button type="button" class="secondary" id="add-row-btn">+ Add row</button>
+    <small>Empty rows (no recipient) are ignored on submit.</small>
+</p>
 <p>
     <label>
         <input type="checkbox" name="mark_as_mailed" value="true">
@@ -57,5 +77,39 @@
 </form>
 </div>
 
-<p><small>Need a recipient that isn't in your address book yet? <a href="/addresses/new">Add it first</a>, then come back here.</small></p>
+<p><small>Total cap: {{ batch_total_limit }} pieces per submission, {{ batch_count_limit }} per row.
+   Need a recipient that isn't in your address book yet?
+   <a href="/addresses/new">Add it first</a>, then come back here.</small></p>
+
+<script>
+// "+ Add row" — clones the last row's structure, increments the row-N indices,
+// clears values. Keeps the address option lists in sync without a server round-trip.
+(function () {
+    const tbody = document.getElementById("batch-rows");
+    const btn = document.getElementById("add-row-btn");
+    function nextIndex() {
+        // The visible row count is the source of truth — server detects rows
+        // by sniffing form keys, so any contiguous numbering works.
+        return tbody.querySelectorAll("tr.batch-row").length;
+    }
+    btn.addEventListener("click", function () {
+        const last = tbody.querySelector("tr.batch-row:last-child");
+        if (!last) return;
+        const clone = last.cloneNode(true);
+        const i = nextIndex();
+        clone.querySelector(".row-num").textContent = i + 1;
+        clone.querySelectorAll("[name]").forEach(function (el) {
+            el.name = el.name.replace(/^row-\d+-/, `row-${i}-`);
+            if (el.tagName === "SELECT") {
+                el.selectedIndex = 0;
+            } else if (el.type === "checkbox") {
+                el.checked = true;  // ZIP-in-IMb defaults on
+            } else {
+                el.value = "";
+            }
+        });
+        tbody.appendChild(clone);
+    });
+})();
+</script>
 {% endblock %}

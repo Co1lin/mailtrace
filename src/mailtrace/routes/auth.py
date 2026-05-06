@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from typing import Annotated
+from zoneinfo import ZoneInfoNotFoundError, available_timezones
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import select
 
 from .. import auth as auth_lib
@@ -13,6 +14,22 @@ from ..db import SessionDep
 from ..mail import Mailer, MailerError, OutgoingMessage, load_smtp_config
 from ..models import User, utcnow
 from ..usps import USPSClient, USPSError
+
+
+def _validate_timezone(name: str) -> str:
+    """Return the canonical IANA name if valid, else raise ValueError.
+
+    Uses zoneinfo.available_timezones() rather than constructing a ZoneInfo
+    so the check is purely string-membership — no filesystem read needed
+    per call, and the error type is predictable.
+    """
+    name = name.strip()
+    if not name:
+        raise ValueError("timezone is required")
+    if name not in available_timezones():
+        raise ZoneInfoNotFoundError(name)
+    return name
+
 
 router = APIRouter()
 
@@ -73,12 +90,19 @@ async def change_password_form(request: Request) -> HTMLResponse:
     return response
 
 
+# Tail of the IANA timezone list rendered into the account page <datalist>
+# for autocomplete. Computed once at import time — `available_timezones()`
+# walks the system tzdata, no need to redo it per request.
+_TIMEZONE_OPTIONS: tuple[str, ...] = tuple(sorted(available_timezones()))
+
+
 def _account_context(user: User) -> dict[str, object]:
     """Status flags the template uses to drive the section badges."""
     return {
         "mid_set": user.mailer_id is not None,
         "usps_api_set": bool(user.usps_client_id and user.usps_client_secret),
         "bcg_set": bool(user.bcg_username and user.bcg_password),
+        "timezone_options": _TIMEZONE_OPTIONS,
     }
 
 
@@ -115,6 +139,7 @@ async def account_save(
     leave_bcg_password_unchanged: Annotated[bool, Form()] = False,
     notify_on_scans: Annotated[bool, Form()] = False,
     notify_email: Annotated[str, Form()] = "",
+    timezone: Annotated[str, Form()] = "",
 ) -> Response:
     user: User | None = getattr(request.state, "user", None)
     if user is None:
@@ -163,10 +188,45 @@ async def account_save(
         user_in_db.bcg_last_check = ""
     user_in_db.notify_on_scans = bool(notify_on_scans)
     user_in_db.notify_email = notify_email.strip() or None
+    # Empty submission clears the timezone (back to "use UTC for emails");
+    # non-empty must validate against the IANA tz database.
+    if timezone.strip():
+        try:
+            user_in_db.timezone = _validate_timezone(timezone)
+        except (ValueError, ZoneInfoNotFoundError):
+            return render_error(f"Unknown timezone: {timezone!r}")
+    else:
+        user_in_db.timezone = None
     await db.commit()
 
     request.session["account_flash"] = "Saved."
     return RedirectResponse("/auth/account", status_code=303)
+
+
+@router.post("/timezone-init")
+async def timezone_init(
+    request: Request,
+    db: SessionDep,
+    tz: Annotated[str, Form()],
+) -> Response:
+    """First-load auto-capture endpoint. The base template POSTs the
+    browser's detected timezone here when the logged-in user has none
+    saved. No-op if the user already has one (so a stale browser tab
+    can't overwrite an explicit choice from another device)."""
+    user: User | None = getattr(request.state, "user", None)
+    if user is None:
+        return JSONResponse({"ok": False, "reason": "not logged in"}, status_code=401)
+    user_in_db = await db.get(User, user.id)
+    if user_in_db is None:
+        return JSONResponse({"ok": False, "reason": "user gone"}, status_code=404)
+    if user_in_db.timezone:
+        return JSONResponse({"ok": True, "saved": False, "reason": "already set"})
+    try:
+        user_in_db.timezone = _validate_timezone(tz)
+    except (ValueError, ZoneInfoNotFoundError):
+        return JSONResponse({"ok": False, "reason": f"invalid tz {tz!r}"}, status_code=400)
+    await db.commit()
+    return JSONResponse({"ok": True, "saved": True, "timezone": user_in_db.timezone})
 
 
 # ---------------------------------------------------------------------------

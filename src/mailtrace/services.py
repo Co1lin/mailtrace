@@ -15,6 +15,7 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -428,8 +429,27 @@ def _ensure_aware_or(value: dt.datetime | None, fallback: dt.datetime) -> dt.dat
     return value
 
 
-def _format_scan_line(scan: Scan) -> str:
-    when = scan.scanned_at.strftime("%Y-%m-%d %H:%M") if scan.scanned_at else "—"
+def _resolve_user_tz(user: User) -> dt.tzinfo:
+    """Pick the timezone for out-of-band rendering (e.g. emails). Falls
+    back to UTC if the user hasn't set one or the saved name is invalid
+    (which can happen if tzdata is removed between save and render)."""
+    name = user.timezone
+    if not name:
+        return dt.UTC
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return dt.UTC
+
+
+def _format_scan_when(scanned_at: dt.datetime | None, tz: dt.tzinfo) -> str:
+    if scanned_at is None:
+        return "—"
+    return scanned_at.astimezone(tz).strftime("%Y-%m-%d %H:%M %Z")
+
+
+def _format_scan_line(scan: Scan, tz: dt.tzinfo) -> str:
+    when = _format_scan_when(scan.scanned_at, tz)
     where_parts = [
         scan.facility_name or "",
         scan.facility_city or "",
@@ -445,6 +465,7 @@ def _build_digest(
     pieces_with_new_scans: list[tuple[MailPiece, list[Scan]]],
     public_base_url: str,
 ) -> OutgoingMessage:
+    tz = _resolve_user_tz(user)
     total = sum(len(s) for _, s in pieces_with_new_scans)
     plural = "" if total == 1 else "s"
     subject = f"mailtrace: {total} new scan{plural} on {len(pieces_with_new_scans)} piece(s)"
@@ -455,7 +476,7 @@ def _build_digest(
         url = f"{public_base_url.rstrip('/')}/pieces/{piece.id}" if public_base_url else ""
         lines.append(f'"{title}"  ({piece.human_readable_imb()}):')
         for s in scans:
-            lines.append(_format_scan_line(s))
+            lines.append(_format_scan_line(s, tz))
         if url:
             lines.append(f"  → {url}")
         lines.append("")
@@ -466,7 +487,7 @@ def _build_digest(
             "<tr><th>When</th><th>Event</th><th>Facility</th><th>City</th><th>State</th></tr>"
         )
         for s in scans:
-            when = s.scanned_at.strftime("%Y-%m-%d %H:%M") if s.scanned_at else "—"
+            when = _format_scan_when(s.scanned_at, tz)
             label = s.event_code or s.handling_event_type or "—"
             html_blocks.append(
                 f"<tr><td>{when}</td><td>{label}</td>"
