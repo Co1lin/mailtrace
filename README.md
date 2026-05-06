@@ -44,7 +44,8 @@ are published as multi-arch container images to GHCR
 - **Email digests** — opt-in per user; whenever new scans arrive, the
   user gets a single digest email summarizing all updates. SMTP is
   configured in the admin portal at `/admin/email`, with copy-paste field
-  guides for Office 365, Gmail, and transactional relays.
+  guides for transactional relays (recommended), Gmail, and Microsoft 365
+  (with notes on Microsoft's 2024+ SMTP AUTH deprecation).
 - **Envelope generator** — #10 envelope (PDF/HTML) and Avery 8163 sticker
   layouts, with the bundled USPS IMb font embedded inline.
 - **Address standardization** via the new USPS API at `apis.usps.com`.
@@ -107,8 +108,11 @@ or leave it as localhost when fronted by a reverse proxy on the host).
    password. Submit. The `/setup` page disappears as soon as any user
    exists, so it's not a hijack vector after the box is up.
 3. Log in. As host, you should now configure platform-level services:
-   - `/admin/email` — point to an SMTP server (Office 365, Gmail,
-     SendGrid, etc.) so digest emails can go out. Click *Send test*.
+   - `/admin/email` — point to an SMTP server (a transactional relay like
+     Resend / SendGrid / Postmark is the recommended path; Gmail app
+     passwords also work) so digest emails can go out. Click *Send test*.
+     Microsoft 365 SMTP AUTH is mostly disabled by Microsoft as of 2024+ —
+     the admin page explains the workaround.
    - `/admin/ingest` — generate a Basic Auth password for the IV-MTR
      push receiver if you want push-tracking (see
      [Configuring the USPS push feed](#configuring-the-usps-push-feed)).
@@ -245,9 +249,15 @@ as `failed` rows for forensics.
 
 In `/admin/email`:
 
-1. Pick your SMTP server (the page has copy-paste field guides for
-   Office 365, Gmail, and transactional relays like SendGrid / Postmark /
-   Resend / SES).
+1. Pick your SMTP server. Recommended: a **transactional relay** —
+   SendGrid, Resend, Postmark, Mailgun, or AWS SES. They all have free
+   tiers that easily cover homelab volume, and they avoid the deliverability
+   and basic-auth-deprecation rough edges of consumer mail providers.
+   **Gmail / Workspace app passwords** also work. **Microsoft 365 / Office 365**
+   SMTP AUTH was disabled by Microsoft on most org tenants during 2024 —
+   app passwords no longer help; the `/admin/email` page documents the
+   workaround (use a relay with your domain DKIM-verified, set From to your
+   M365 address). Full field-by-field guidance lives on the page itself.
 2. Save and click **Send test email** to verify.
 3. Each user opts in on their own **Account** page (`/auth/account`) by
    ticking "Email me when scans arrive."
