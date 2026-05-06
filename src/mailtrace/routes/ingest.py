@@ -184,15 +184,11 @@ async def _write_log(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/usps_feed")
-async def usps_feed(request: Request, db: SessionDep) -> Response:
-    """Receive a USPS IV-MTR Data Delivery POST.
-
-    Returns 200 on success (whether or not all events matched a piece);
-    401 on auth failure; 413 on body too large; 400 on malformed body;
-    503 when the subscription is disabled (so USPS knows to retry rather
-    than treating us as gone).
-    """
+async def _gate_enabled_and_authed(request: Request, db: SessionDep) -> IngestSubscription:
+    """Shared 503/401 gate for every /usps_feed entry point (POST + the
+    GET/HEAD probes USPS uses for "Test Server Connection"). Returns
+    the IngestSubscription row on success; raises HTTPException
+    otherwise (and writes a `failed` IngestLog row on auth miss)."""
     settings: Settings = request.app.state.settings
     cfg = (
         await db.execute(select(IngestSubscription).where(IngestSubscription.id == 1))
@@ -221,6 +217,56 @@ async def usps_feed(request: Request, db: SessionDep) -> Response:
             detail="invalid credentials",
             headers={"WWW-Authenticate": 'Basic realm="usps-iv"'},
         )
+    return cfg
+
+
+def _probe_response() -> Response:
+    """Body USPS' Test Server Connection (and any other probe) gets when
+    everything is wired correctly."""
+    return Response(
+        content=json.dumps({"status": "ok", "probe": True}),
+        media_type="application/json",
+        status_code=200,
+    )
+
+
+@router.get("/usps_feed", include_in_schema=False)
+@router.head("/usps_feed", include_in_schema=False)
+async def usps_feed_probe(request: Request, db: SessionDep) -> Response:
+    """USPS' Test Server Connection occasionally probes with GET / HEAD
+    instead of an empty POST. Same auth+enabled gate as the POST handler;
+    returns 200 if your credentials work and the receiver is enabled,
+    so USPS' control panel sees a green check.
+
+    The actual delivery method is always POST — this is purely a probe
+    affordance for clients that don't trust an empty POST body.
+    """
+    cfg = await _gate_enabled_and_authed(request, db)
+    settings: Settings = request.app.state.settings
+    await _write_log(
+        db,
+        request=request,
+        settings=settings,
+        status="probe",
+        error=f"probe via {request.method}",
+    )
+    await db.commit()
+    _ = cfg  # quiet ruff; the call above is the gate
+    return _probe_response()
+
+
+@router.post("/usps_feed")
+async def usps_feed(request: Request, db: SessionDep) -> Response:
+    """Receive a USPS IV-MTR Data Delivery POST.
+
+    Returns 200 on success (whether or not all events matched a piece);
+    200 on an empty body (the "Test Server Connection" probe USPS sends
+    with no payload); 401 on auth failure; 413 on body too large; 400 on
+    malformed body; 503 when the subscription is disabled (so USPS knows
+    to retry rather than treating us as gone).
+    """
+    settings: Settings = request.app.state.settings
+    cfg = await _gate_enabled_and_authed(request, db)
 
     declared = request.headers.get("content-length")
     max_bytes = max(1, cfg.max_body_mb) * 1024 * 1024
@@ -233,6 +279,24 @@ async def usps_feed(request: Request, db: SessionDep) -> Response:
 
     raw_bytes = await request.body()
     bytes_received = len(raw_bytes)
+
+    # USPS' "Test Server Connection" sends an empty (or whitespace-only)
+    # POST body to verify reachability + credentials. Don't try to JSON-
+    # parse zero bytes — that would 400 and USPS would mark the
+    # connection as failed even though everything is wired correctly.
+    # We've already validated auth in the gate above, so a 200 here
+    # means "your creds work AND the receiver is enabled".
+    if not raw_bytes.strip():
+        await _write_log(
+            db,
+            request=request,
+            settings=settings,
+            status="probe",
+            error="probe via POST (empty body)",
+        )
+        await db.commit()
+        return _probe_response()
+
     if bytes_received > max_bytes:
         await _write_log(
             db,

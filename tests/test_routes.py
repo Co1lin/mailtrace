@@ -803,6 +803,98 @@ async def test_feed_accepts_plain_when_expect_gzip_set(
     assert resp.json()["records"] == 1
 
 
+# ---------------------------------------------------------------------------
+# USPS "Test Server Connection" probe affordances
+# ---------------------------------------------------------------------------
+
+
+async def test_probe_empty_post_body_returns_200(
+    anon_client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """USPS' Test Server Connection probes with an empty POST. Used to
+    return 400 invalid-JSON; must now return 200 (after auth) so USPS'
+    portal shows the connection as healthy."""
+    await _enable_ingest(db_sessionmaker)
+    resp = await anon_client.post(
+        "/usps_feed",
+        content=b"",
+        headers={"authorization": _iv_auth_header()},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "ok", "probe": True}
+
+
+async def test_probe_whitespace_only_body_returns_200(
+    anon_client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """Some clients send whitespace instead of a true empty body."""
+    await _enable_ingest(db_sessionmaker)
+    resp = await anon_client.post(
+        "/usps_feed",
+        content=b"   \n\t\n",
+        headers={"authorization": _iv_auth_header()},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+async def test_probe_get_returns_200(
+    anon_client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """GET /usps_feed (probe variant) must 200 with valid creds, not 405."""
+    await _enable_ingest(db_sessionmaker)
+    resp = await anon_client.get("/usps_feed", headers={"authorization": _iv_auth_header()})
+    assert resp.status_code == 200, resp.text
+
+
+async def test_probe_head_returns_200(
+    anon_client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """HEAD /usps_feed must also 200 — body absent per the HEAD spec."""
+    await _enable_ingest(db_sessionmaker)
+    resp = await anon_client.head("/usps_feed", headers={"authorization": _iv_auth_header()})
+    assert resp.status_code == 200
+
+
+async def test_probe_get_without_auth_returns_401(
+    anon_client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """The probe path still requires Basic Auth — confirms creds work,
+    not just reachability. (Otherwise USPS could see a green check while
+    deliveries silently 401 in production.)"""
+    await _enable_ingest(db_sessionmaker)
+    resp = await anon_client.get("/usps_feed")
+    assert resp.status_code == 401
+
+
+async def test_probe_when_disabled_returns_503(
+    anon_client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """If the receiver is off, the probe should report it (503), not
+    falsely succeed."""
+    # Don't enable; row absent → 503.
+    resp = await anon_client.post(
+        "/usps_feed",
+        content=b"",
+        headers={"authorization": _iv_auth_header()},
+    )
+    assert resp.status_code == 503
+
+
+async def test_probe_writes_log_row(
+    anon_client: AsyncClient, db_sessionmaker: async_sessionmaker
+) -> None:
+    """Probes show up in the recent-deliveries table with status='probe'
+    so operators can confirm USPS is actually pinging them."""
+    from mailtrace.models import IngestLog
+
+    await _enable_ingest(db_sessionmaker)
+    await anon_client.post("/usps_feed", content=b"", headers={"authorization": _iv_auth_header()})
+    async with db_sessionmaker() as db:
+        rows = list((await db.execute(select(IngestLog))).scalars().all())
+    assert len(rows) == 1
+    assert rows[0].status == "probe"
+
+
 async def test_feed_decompresses_gzip_when_expect_gzip_unset(
     anon_client: AsyncClient,
     db_sessionmaker: async_sessionmaker,
