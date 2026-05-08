@@ -1001,3 +1001,44 @@ def test_pdf_imb_meets_usps_length_spec_for_all_layouts() -> None:
         assert USPS_MIN_IN <= width_in <= USPS_MAX_IN, (
             f'{key} IMb width {width_in:.3f}" is outside USPS spec [{USPS_MIN_IN}-{USPS_MAX_IN}]'
         )
+
+
+def test_pdf_human_readable_imb_appears_on_all_layouts() -> None:
+    """Every layout — including the 1"-tall 5161 — must print the
+    human-readable IMb digits below the barcode so a peeled sticker
+    can be matched back to its piece on the platform.
+    """
+    import subprocess
+    from pathlib import Path
+
+    from mailtrace import pdf
+    from mailtrace.routes.pieces import AVERY_LAYOUTS
+
+    hr_text = "01-270-123456789-000001-94103"
+
+    class _Stub:
+        imb_letters = "TADTADTDDFFADTFTFDTAFTDFADFTDFTDADTFAFFTDDFADTFDFFTDADTAFFTDADTAFF"
+        recipient_block = "Jane Q Recipient\n123 Main Street\nSan Francisco CA 94103"
+        sender_block = ""
+
+        def human_readable_imb(self) -> str:
+            return hr_text
+
+    for key, layout in AVERY_LAYOUTS.items():
+        body = pdf.render_label_sheet(layout=layout, pieces=[_Stub()])  # type: ignore[list-item]
+        try:
+            tmp = Path(f"/tmp/_hr_imb_test_{key}.pdf")
+            tmp.write_bytes(body)
+            result = subprocess.run(
+                ["pdftotext", str(tmp), "-"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            import pytest
+
+            pytest.skip("pdftotext (poppler) not available")
+        assert hr_text in result.stdout, (
+            f"{key}: human-readable IMb {hr_text!r} not found in rendered PDF"
+        )

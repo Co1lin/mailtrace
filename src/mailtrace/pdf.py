@@ -62,7 +62,8 @@ for _path in _DEJAVU_CANDIDATES:
 @dataclass(frozen=True)
 class LabelStyle:
     """Per-Avery-model font sizing. Smaller-height labels get smaller
-    fonts (and the 1"-tall 5161 drops the human-readable IMb line entirely).
+    fonts; the 1"-tall 5161 prints the human-readable IMb at a tiny
+    6pt so each peeled sticker can still be matched back to its piece.
     """
 
     imb_pt: int
@@ -88,7 +89,7 @@ _STYLES: dict[str, LabelStyle] = {
         imb_pt=17, human_readable_pt=8, address_pt=10, address_line_pt=11.5, padding_in=0.08
     ),
     "5161": LabelStyle(
-        imb_pt=17, human_readable_pt=0, address_pt=8, address_line_pt=9, padding_in=0.05
+        imb_pt=17, human_readable_pt=6, address_pt=8, address_line_pt=9, padding_in=0.05
     ),
 }
 _DEFAULT_STYLE = _STYLES["5163"]
