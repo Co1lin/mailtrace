@@ -18,6 +18,8 @@ from ..auth import CurrentUserDep
 from ..db import SessionDep
 from ..models import (
     STATUS_ARCHIVED,
+    STATUS_DELIVERED,
+    STATUS_EXPECTED,
     STATUS_GENERATED,
     STATUS_IN_FLIGHT,
     STATUS_PRINTED,
@@ -89,7 +91,8 @@ _LIST_STATUS_FILTERS = {
     "generated": STATUS_GENERATED,
     "printed": STATUS_PRINTED,
     "in_flight": STATUS_IN_FLIGHT,
-    "delivered": "delivered",
+    "expected": STATUS_EXPECTED,
+    "delivered": STATUS_DELIVERED,
 }
 
 
@@ -129,7 +132,8 @@ async def list_pieces(
         func.count().filter(MailPiece.archived_at.is_(None), MailPiece.status == STATUS_GENERATED),
         func.count().filter(MailPiece.archived_at.is_(None), MailPiece.status == STATUS_PRINTED),
         func.count().filter(MailPiece.archived_at.is_(None), MailPiece.status == STATUS_IN_FLIGHT),
-        func.count().filter(MailPiece.archived_at.is_(None), MailPiece.status == "delivered"),
+        func.count().filter(MailPiece.archived_at.is_(None), MailPiece.status == STATUS_EXPECTED),
+        func.count().filter(MailPiece.archived_at.is_(None), MailPiece.status == STATUS_DELIVERED),
     ).where(MailPiece.user_id == user.id)
     (
         active_count,
@@ -137,6 +141,7 @@ async def list_pieces(
         generated_count,
         printed_count,
         in_flight_count,
+        expected_count,
         delivered_count,
     ) = (await db.execute(counts_stmt)).one()
 
@@ -153,6 +158,7 @@ async def list_pieces(
             "generated_count": generated_count,
             "printed_count": printed_count,
             "in_flight_count": in_flight_count,
+            "expected_count": expected_count,
             "delivered_count": delivered_count,
         },
     )

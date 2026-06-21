@@ -114,7 +114,10 @@ class USPSClient:
         except httpx.HTTPError as err:
             raise USPSError(f"failed to obtain USPS token: {err}") from err
 
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError as err:
+            raise USPSError(f"USPS token response was not JSON: {err}") from err
         access_token = payload.get("access_token")
         if not access_token:
             raise USPSError("USPS token response missing access_token")
@@ -164,8 +167,13 @@ class USPSClient:
             response.raise_for_status()
         except httpx.HTTPError as err:
             raise USPSError(f"failed to obtain IV token: {err}") from err
-        payload = response.json()
-        access_token = payload["access_token"]
+        try:
+            payload = response.json()
+        except ValueError as err:
+            raise USPSError(f"IV token response was not JSON: {err}") from err
+        access_token = payload.get("access_token")
+        if not access_token:
+            raise USPSError("USPS IV token response missing access_token")
         token_type = payload.get("token_type", "Bearer")
         expires_in = int(payload.get("expires_in", 1800))
         refresh_at = time.time() + expires_in / 2
@@ -185,7 +193,16 @@ class USPSClient:
             response.raise_for_status()
         except httpx.HTTPError as err:
             raise USPSError(f"piece tracking failed: {err}") from err
-        result: dict[str, Any] = response.json()
+        # USPS occasionally answers 200 with an empty body (e.g. a piece with
+        # no tracking data yet). Treat that as "no scans" rather than letting
+        # the JSON decoder raise — an empty body is not an error, it's an
+        # empty result. A non-empty but invalid body *is* an error.
+        if not response.text.strip():
+            return {}
+        try:
+            result: dict[str, Any] = response.json()
+        except ValueError as err:
+            raise USPSError(f"piece tracking returned a non-JSON response: {err}") from err
         return result
 
     async def standardize_address(self, user: User, address: dict[str, str]) -> StandardizedAddress:
@@ -212,7 +229,10 @@ class USPSClient:
             response.raise_for_status()
         except httpx.HTTPError as err:
             raise USPSError(f"address standardization failed: {err}") from err
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as err:
+            raise USPSError(f"address standardization returned a non-JSON response: {err}") from err
         if "errors" in data:
             raise USPSError(str(data["errors"]))
         info = data.get("address", {})

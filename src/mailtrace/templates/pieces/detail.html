@@ -21,7 +21,11 @@
         </div>
     </form>
     <p><strong>Status:</strong> <span class="pill">{{ piece.status }}</span>
-       {% if piece.archived_at %} <span class="pill inactive">archived</span>{% endif %}</p>
+       {% if piece.archived_at %} <span class="pill inactive">archived</span>{% endif %}
+       {% if piece.expected_delivery_date %}
+       <small>· USPS expected delivery {{ piece.expected_delivery_date.isoformat() }}{% if piece.status == 'expected' %} — USPS issues no delivery scan for letters, so this is inferred{% endif %}</small>
+       {% endif %}
+    </p>
     <p><strong>IMb:</strong> <code>{{ piece.human_readable_imb() }}</code></p>
     <p><strong>Lookup key:</strong> <code>{{ piece.imb_raw }}</code>
        (<small>{{ 'with' if piece.include_zip_in_imb else 'without' }} ZIP</small>)</p>

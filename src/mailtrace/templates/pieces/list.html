@@ -27,6 +27,8 @@
     &nbsp;·&nbsp;
     {{ tab('/pieces/?status=in_flight', 'In flight', in_flight_count, status_filter == 'in_flight') }}
     &nbsp;·&nbsp;
+    {{ tab('/pieces/?status=expected', 'Expected', expected_count, status_filter == 'expected') }}
+    &nbsp;·&nbsp;
     {{ tab('/pieces/?status=delivered', 'Delivered', delivered_count, status_filter == 'delivered') }}
     &nbsp;·&nbsp;
     {{ tab('/pieces/?archived=1', 'Archived', archived_count, false) }}
@@ -49,7 +51,7 @@
         <td><a href="/pieces/{{ p.id }}"><time data-utc="{{ p.created_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</time></a></td>
         <td>{{ p.label or '—' }}</td>
         <td>{{ p.recipient_block.split('\n')[0] if p.recipient_block else '—' }}</td>
-        <td><span class="pill">{{ p.status }}</span></td>
+        <td><span class="pill">{{ p.status }}</span>{% if p.status == 'expected' and p.expected_delivery_date %}<br><small title="USPS predicted delivery; letters get no delivery scan">~{{ p.expected_delivery_date.isoformat() }}</small>{% endif %}</td>
         <td><code>{{ p.human_readable_imb() }}</code></td>
         <td>{% if p.last_polled_at %}<time data-utc="{{ p.last_polled_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ p.last_polled_at.strftime('%Y-%m-%d %H:%M') }}</time>{% else %}—{% endif %}</td>
     </tr>

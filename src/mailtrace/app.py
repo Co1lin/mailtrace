@@ -83,6 +83,8 @@ _ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("mailpieces", "shipped_from", "VARCHAR(200) NOT NULL DEFAULT ''"),
     ("mailpieces", "shipped_from_lat", "FLOAT"),
     ("mailpieces", "shipped_from_lng", "FLOAT"),
+    # USPS predicted delivery date — drives the inferred "expected" status.
+    ("mailpieces", "expected_delivery_date", "DATE"),
 )
 
 

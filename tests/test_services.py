@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from mailtrace import services
 from mailtrace.models import (
     STATUS_DELIVERED,
+    STATUS_EXPECTED,
     STATUS_IN_FLIGHT,
     Address,
     MailPiece,
@@ -210,6 +211,118 @@ async def test_ingest_scan_promotes_status_on_delivery(
             {"scanDatetime": "2025-01-20T15:00:00", "scanEventCode": "01"},
             source="feed",
         )
+        await db.commit()
+        assert piece.status == STATUS_DELIVERED
+
+
+# ---------------------------------------------------------------------------
+# ingest_piece_payload: expected-delivery inference
+# ---------------------------------------------------------------------------
+
+
+async def _make_in_flight_piece(db, store):  # type: ignore[no-untyped-def]
+    u = User(email=f"exp{utcnow().timestamp()}@example.com", password_hash="x", mailer_id=314159)
+    db.add(u)
+    await db.commit()
+    await db.refresh(u)
+    piece = await services.create_piece(
+        db,
+        store=store,
+        user=u,
+        draft=PieceDraft(
+            recipient_block_inline="Bob\n200 Market St\nSometown, CA, 94105",
+            recipient_zip_inline="94105",
+        ),
+        initial_status=STATUS_IN_FLIGHT,
+    )
+    await db.commit()
+    return piece
+
+
+def _carrier_payload(imb: str, expected: str) -> dict:
+    """A First-Class-letter payload: Phase 3c scan + USPS expected date, no
+    actual-delivery field (the real-world shape that left pieces stuck)."""
+    return {
+        "data": {
+            "imb": imb,
+            "expected_delivery_date": expected,
+            "scans": [
+                {
+                    "scan_date_time": "2026-05-14T23:16:42",
+                    "scan_event_code": "919",
+                    "mail_phase": "Phase 3c- Destination Sequenced Carrier Sortation",
+                    "scan_facility_city": "NEW YORK",
+                    "scan_facility_state": "NY",
+                },
+            ],
+        }
+    }
+
+
+async def test_payload_marks_expected_when_carrier_sort_and_date_passed(
+    db_sessionmaker: async_sessionmaker, store: Store
+) -> None:
+    async with db_sessionmaker() as db:
+        piece = await _make_in_flight_piece(db, store)
+        now = dt.datetime(2026, 5, 20, 12, 0, tzinfo=dt.UTC)  # past expected 5/15
+        await services.ingest_piece_payload(
+            db, piece, _carrier_payload(piece.imb_raw, "2026-05-15"), now=now
+        )
+        await db.commit()
+        assert piece.expected_delivery_date == dt.date(2026, 5, 15)
+        assert piece.status == STATUS_EXPECTED
+
+
+async def test_payload_stays_in_flight_before_expected_date(
+    db_sessionmaker: async_sessionmaker, store: Store
+) -> None:
+    async with db_sessionmaker() as db:
+        piece = await _make_in_flight_piece(db, store)
+        now = dt.datetime(2026, 5, 14, 12, 0, tzinfo=dt.UTC)  # before expected 5/15
+        await services.ingest_piece_payload(
+            db, piece, _carrier_payload(piece.imb_raw, "2026-05-15"), now=now
+        )
+        await db.commit()
+        # Date captured for the UI, but not yet inferred delivered.
+        assert piece.expected_delivery_date == dt.date(2026, 5, 15)
+        assert piece.status == STATUS_IN_FLIGHT
+
+
+async def test_payload_not_expected_without_carrier_sort(
+    db_sessionmaker: async_sessionmaker, store: Store
+) -> None:
+    """A piece stuck at origin (no Phase 3 scan) must NOT be inferred
+    delivered, even after the predicted date — it may be lost."""
+    async with db_sessionmaker() as db:
+        piece = await _make_in_flight_piece(db, store)
+        now = dt.datetime(2026, 6, 1, 12, 0, tzinfo=dt.UTC)
+        payload = {
+            "data": {
+                "imb": piece.imb_raw,
+                "expected_delivery_date": "2026-05-15",
+                "scans": [
+                    {
+                        "scan_date_time": "2026-05-12T08:00:00",
+                        "scan_event_code": "066",
+                        "mail_phase": "Phase 0 - Origin Processing Cancellation of Postage",
+                    }
+                ],
+            }
+        }
+        await services.ingest_piece_payload(db, piece, payload, now=now)
+        await db.commit()
+        assert piece.status == STATUS_IN_FLIGHT
+
+
+async def test_payload_actual_delivery_beats_expected(
+    db_sessionmaker: async_sessionmaker, store: Store
+) -> None:
+    async with db_sessionmaker() as db:
+        piece = await _make_in_flight_piece(db, store)
+        now = dt.datetime(2026, 5, 20, 12, 0, tzinfo=dt.UTC)
+        payload = _carrier_payload(piece.imb_raw, "2026-05-15")
+        payload["data"]["actual_delivery_date"] = "2026-05-15"
+        await services.ingest_piece_payload(db, piece, payload, now=now)
         await db.commit()
         assert piece.status == STATUS_DELIVERED
 

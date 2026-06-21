@@ -6,6 +6,7 @@ import datetime as dt
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -141,13 +142,22 @@ class Address(Base):
 
 
 # Status values for MailPiece.status. Lifecycle:
-#   generated → printed → in_flight → delivered
+#   generated → printed → in_flight → expected → delivered
 #                                   ↘ archived (soft delete, orthogonal)
 # Only `in_flight` pieces get polled. `generated` and `printed` are stock
 # states (IMb encoded but not yet handed to USPS).
+#
+# `expected` vs `delivered`: USPS emits NO delivery scan for First-Class
+# letters — the final event is Phase 3c (sorted to the carrier). So we can
+# only ever *infer* arrival for letters: once a piece reaches carrier
+# sortation and USPS's own predicted delivery date has passed, it becomes
+# `expected` (honest: "should have arrived", not confirmed). `delivered` is
+# reserved for an explicit USPS delivery signal (actual_delivery_date or a
+# delivery scan code) — which parcels do get. Both are terminal (not polled).
 STATUS_GENERATED = "generated"
 STATUS_PRINTED = "printed"
 STATUS_IN_FLIGHT = "in_flight"
+STATUS_EXPECTED = "expected"
 STATUS_DELIVERED = "delivered"
 STATUS_ARCHIVED = "archived"
 
@@ -155,6 +165,7 @@ ALL_STATUSES = (
     STATUS_GENERATED,
     STATUS_PRINTED,
     STATUS_IN_FLIGHT,
+    STATUS_EXPECTED,
     STATUS_DELIVERED,
     STATUS_ARCHIVED,
 )
@@ -210,6 +221,10 @@ class MailPiece(Base):
     )
     next_poll_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     consecutive_poll_errors: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # USPS's own predicted delivery date (expected_/anticipated_delivery_date
+    # from the IV piece API). For letters this is the only delivery signal we
+    # get — see the STATUS_EXPECTED note above. Date-only (no time).
+    expected_delivery_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     last_notified_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

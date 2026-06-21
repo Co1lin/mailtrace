@@ -25,6 +25,7 @@ from . import imb as imb_lib
 from .mail import Mailer, MailerError, OutgoingMessage
 from .models import (
     STATUS_DELIVERED,
+    STATUS_EXPECTED,
     STATUS_GENERATED,
     STATUS_IN_FLIGHT,
     STATUS_PRINTED,
@@ -36,7 +37,7 @@ from .models import (
     utcnow,
 )
 from .store import Store
-from .usps import USPSClient, USPSError
+from .usps import USPSClient
 
 log = logging.getLogger(__name__)
 
@@ -172,6 +173,38 @@ def _parse_iso(value: Any) -> dt.datetime | None:
         return None
 
 
+def _parse_date(value: Any) -> dt.date | None:
+    """Parse a USPS date field ('2026-05-15', possibly with a time suffix)
+    into a `date`. Returns None for blank / unparseable input."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return dt.date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+# Carrier-sortation phase + the two event codes that mark "sorted into the
+# carrier's walk sequence at the destination unit" — the last electronic
+# event a First-Class letter gets before the carrier delivers it.
+_CARRIER_SORTATION_CODES = {"918", "919"}
+
+
+def _reached_carrier_sortation(scans: list[Any]) -> bool:
+    """True if any scan shows the piece reached destination carrier
+    sortation (Phase 3c). USPS sends no delivery scan for letters, so this
+    is our "arrival is imminent / done" signal — see STATUS_EXPECTED."""
+    for raw in scans:
+        if not isinstance(raw, dict):
+            continue
+        f = _flatten_keys(raw)
+        phase = str(_first(f, "mailphase") or "").strip().lower()
+        code = str(_first(f, "scaneventcode", "eventcode") or "").strip()
+        if phase.startswith("phase 3") or code in _CARRIER_SORTATION_CODES:
+            return True
+    return False
+
+
 def _scan_dedup_hash(norm: dict[str, Any]) -> str:
     """Idempotency key for a scan. Built from the normalized fields, so
     the same physical scan event hashes the same regardless of which
@@ -282,11 +315,18 @@ async def ingest_scan(
     return True
 
 
-async def ingest_piece_payload(db: AsyncSession, piece: MailPiece, payload: dict[str, Any]) -> int:
+async def ingest_piece_payload(
+    db: AsyncSession,
+    piece: MailPiece,
+    payload: dict[str, Any],
+    *,
+    now: dt.datetime | None = None,
+) -> int:
     """Drain a USPS piece-tracking JSON payload into Scan rows.
 
     Returns the number of new scans persisted.
     """
+    now = now or utcnow()
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
         return 0
@@ -297,13 +337,33 @@ async def ingest_piece_payload(db: AsyncSession, piece: MailPiece, payload: dict
             continue
         if await ingest_scan(db, piece, raw, source="poll"):
             inserted += 1
-    # Heuristic: if USPS hands us an actual_delivery_date (or similar field),
-    # promote the piece to "delivered" even if the scan codes didn't trip
-    # the marker check above.
+
+    # Capture USPS's own predicted delivery date. For letters this is the
+    # only delivery signal we ever get (no delivery scan is emitted).
+    expected = _parse_date(
+        _first(_flatten_keys(data), "expecteddeliverydate", "anticipateddeliverydate")
+    )
+    if expected is not None:
+        piece.expected_delivery_date = expected
+
+    # Confirmed delivery: USPS handed us an explicit actual-delivery field
+    # (parcels get this). Trumps the inferred path below.
     for key in ("actualDeliveryDate", "actual_delivery_date", "deliveryDate", "delivery_date"):
         if data.get(key):
             piece.status = STATUS_DELIVERED
-            break
+            return inserted
+
+    # Inferred delivery ("expected"): a First-Class letter that has reached
+    # destination carrier sortation (Phase 3c) and whose predicted delivery
+    # date has passed has almost certainly been delivered — USPS just won't
+    # tell us. Only promote in-flight pieces; never downgrade or touch stock.
+    if (
+        piece.status == STATUS_IN_FLIGHT
+        and piece.expected_delivery_date is not None
+        and now.date() > piece.expected_delivery_date
+        and _reached_carrier_sortation(scans)
+    ):
+        piece.status = STATUS_EXPECTED
     return inserted
 
 
@@ -365,11 +425,16 @@ async def poll_one(
         return 0, "owning user not found"
     try:
         payload = await usps.get_piece_tracking(user, piece.imb_raw)
-    except USPSError as err:
+    except Exception as err:
+        # A single piece's poll must never bubble up: in the manual-refresh
+        # route an uncaught error becomes a 500, and in the background loop
+        # it aborts the whole cycle before commit (losing every other piece's
+        # scans). USPSError is the expected case; anything else (e.g. a
+        # malformed USPS response) is still just a soft per-piece failure.
         piece.consecutive_poll_errors += 1
         piece.last_polled_at = utcnow()
         piece.next_poll_at = next_poll_at_for(piece)
-        return 0, str(err)
+        return 0, str(err) or err.__class__.__name__
     inserted = await ingest_piece_payload(db, piece, payload)
     piece.consecutive_poll_errors = 0
     piece.last_polled_at = utcnow()
