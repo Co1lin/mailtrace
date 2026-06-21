@@ -160,3 +160,29 @@ def test_lifespan_does_not_run_ddl(tmp_path: Path) -> None:
                 await engine.dispose()
 
     asyncio.run(_exercise())
+
+
+# ---------------------------------------------------------------------------
+# make_engine pool_pre_ping — regression coverage for the MissingGreenlet
+# crash where pool_pre_ping=True on aiosqlite killed the background poll
+# loop on every long-idle connection checkout.
+# ---------------------------------------------------------------------------
+
+
+def test_make_engine_disables_pre_ping_for_sqlite() -> None:
+    from mailtrace.db import _pool_pre_ping_for, make_engine
+
+    assert _pool_pre_ping_for("sqlite+aiosqlite:////data/mailtrace.db") is False
+    assert _pool_pre_ping_for("sqlite+aiosqlite:///:memory:") is False
+    # pool_pre_ping must be OFF on the actual SQLite engine's pool.
+    engine = make_engine("sqlite+aiosqlite:///:memory:")
+    assert engine.pool._pre_ping is False
+
+
+def test_pool_pre_ping_enabled_for_network_backends() -> None:
+    from mailtrace.db import _pool_pre_ping_for
+
+    # Network DBs (Postgres) keep pre-ping — it recovers dropped sockets.
+    assert _pool_pre_ping_for("postgresql+asyncpg://u:p@host/db") is True
+    # Malformed URL falls back to the safe (off) default rather than raising.
+    assert _pool_pre_ping_for("") is False
