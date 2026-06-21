@@ -327,6 +327,31 @@ async def test_payload_actual_delivery_beats_expected(
         assert piece.status == STATUS_DELIVERED
 
 
+async def test_repoll_with_all_duplicate_scans_still_marks_expected(
+    db_sessionmaker: async_sessionmaker, store: Store
+) -> None:
+    """Re-polling a piece re-sends scans we already have. A duplicate insert
+    must not roll back / expire the session (which would crash a later
+    piece.status read with MissingGreenlet under aiosqlite). The second
+    ingest inserts 0 scans but must still apply the expected-status logic."""
+    async with db_sessionmaker() as db:
+        piece = await _make_in_flight_piece(db, store)
+        now = dt.datetime(2026, 5, 20, 12, 0, tzinfo=dt.UTC)
+        payload = _carrier_payload(piece.imb_raw, "2026-05-15")
+
+        first = await services.ingest_piece_payload(db, piece, payload, now=now)
+        await db.commit()
+        assert first == 1
+
+        # Second poll: identical payload — every scan is a duplicate.
+        second = await services.ingest_piece_payload(db, piece, payload, now=now)
+        await db.commit()
+        assert second == 0  # nothing new inserted
+        # …but the piece is still readable and the inference still ran.
+        assert piece.status == STATUS_EXPECTED
+        assert piece.expected_delivery_date == dt.date(2026, 5, 15)
+
+
 # ---------------------------------------------------------------------------
 # poll_one
 # ---------------------------------------------------------------------------

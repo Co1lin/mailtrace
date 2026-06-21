@@ -294,11 +294,18 @@ async def ingest_scan(
         dedup_hash=dedup,
         raw_payload=json.dumps(raw_event, default=str)[:4000],
     )
-    db.add(scan)
+    # Insert inside a SAVEPOINT so a duplicate (the dedup UniqueConstraint
+    # tripping) rolls back ONLY this insert. A full `db.rollback()` would
+    # expire every loaded ORM instance — including `piece` — and a later
+    # attribute read on the now-expired `piece` would trigger a synchronous
+    # lazy-reload that raises MissingGreenlet under aiosqlite's async pool,
+    # killing the whole poll cycle. This path is hit constantly: re-polling a
+    # piece re-sends scans we already have.
     try:
-        await db.flush()
+        async with db.begin_nested():
+            db.add(scan)
+            await db.flush()
     except IntegrityError:
-        await db.rollback()
         return False
 
     # A scan landing on a stock piece means USPS already has it — promote
