@@ -48,8 +48,26 @@ def _error_message(response: httpx.Response) -> str:
     return f"HTTP {response.status_code}"
 
 
+def _join(*parts: str) -> str:
+    return " ".join(p for p in parts if p)
+
+
 def _to_standardized(data: dict[str, Any], *, firmname: str) -> StandardizedAddress:
     comp = data.get("components") or {}
+    primary = data.get("primary_line", "") or ""
+    secondary = data.get("secondary_line", "") or ""
+    # Lob often folds the secondary unit into primary_line (e.g. highrises) and
+    # leaves secondary_line empty. Split it back out so the unit lands in the
+    # address2 field — using components as the source of the unit string, and
+    # only stripping when primary_line actually ends with it (keeps PO boxes /
+    # rural routes, which have no secondary, untouched).
+    if not secondary:
+        unit = _join(comp.get("secondary_designator", ""), comp.get("secondary_number", ""))
+        pmb = _join(comp.get("pmb_designator", ""), comp.get("pmb_number", ""))
+        unit = _join(unit, pmb)
+        if unit and primary.endswith(unit):
+            primary = primary[: -len(unit)].strip()
+            secondary = unit
     # delivery_point_barcode is ZIP5(5) + ZIP4(4) + delivery-point(2) + check(1).
     # We want the 2-digit delivery point so zip5+zip4+dp = the 11-digit routing
     # code the IMb encoder expects.
@@ -58,8 +76,8 @@ def _to_standardized(data: dict[str, Any], *, firmname: str) -> StandardizedAddr
     return StandardizedAddress(
         # Lob doesn't validate/return a firm name — preserve what the user typed.
         firmname=firmname,
-        street_address=data.get("primary_line", "") or "",
-        address2=data.get("secondary_line", "") or "",
+        street_address=primary,
+        address2=secondary,
         city=comp.get("city", "") or "",
         state=comp.get("state", "") or "",
         zip5=comp.get("zip_code", "") or "",

@@ -81,6 +81,69 @@ async def test_verify_maps_fields_and_delivery_point() -> None:
     await client.aclose()
 
 
+async def test_verify_splits_folded_secondary_unit() -> None:
+    """Lob often returns the whole line in primary_line with secondary_line
+    empty (highrises). We must split the unit back into address2 using
+    components so it doesn't all land in the street field."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=json.dumps(
+                {
+                    "primary_line": "434 W 120TH ST APT 8H",
+                    "secondary_line": "",
+                    "deliverability": "deliverable",
+                    "components": {
+                        "secondary_designator": "APT",
+                        "secondary_number": "8H",
+                        "city": "NEW YORK",
+                        "state": "NY",
+                        "zip_code": "10027",
+                        "zip_code_plus_4": "6721",
+                        "delivery_point_barcode": "100276721888",
+                    },
+                }
+            ).encode(),
+        )
+
+    client = _client_with(handler)
+    std = await client.verify(_user(), {"street_address": "434 w 120th st apt 8h"})
+    assert std.street_address == "434 W 120TH ST"
+    assert std.address2 == "APT 8H"
+    await client.aclose()
+
+
+async def test_verify_po_box_left_intact() -> None:
+    """No secondary in components → primary_line is used verbatim (don't
+    mangle PO boxes / rural routes)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=json.dumps(
+                {
+                    "primary_line": "PO BOX 123",
+                    "secondary_line": "",
+                    "deliverability": "deliverable",
+                    "components": {
+                        "city": "RENO",
+                        "state": "NV",
+                        "zip_code": "89501",
+                        "zip_code_plus_4": "0123",
+                        "delivery_point_barcode": "895010123992",
+                    },
+                }
+            ).encode(),
+        )
+
+    client = _client_with(handler)
+    std = await client.verify(_user(), {"street_address": "po box 123"})
+    assert std.street_address == "PO BOX 123"
+    assert std.address2 == ""
+    await client.aclose()
+
+
 async def test_verify_without_key_raises() -> None:
     client = _client_with(lambda request: httpx.Response(200, content=_lob_payload()))
     with pytest.raises(LobError, match="not configured"):
