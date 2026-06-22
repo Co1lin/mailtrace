@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from .. import auth as auth_lib
 from ..db import SessionDep
+from ..lob import LobClient, LobError
 from ..mail import Mailer, MailerError, OutgoingMessage, load_smtp_config
 from ..models import User, utcnow
 from ..usps import USPSClient, USPSError
@@ -101,6 +102,7 @@ def _account_context(user: User) -> dict[str, object]:
     return {
         "mid_set": user.mailer_id is not None,
         "usps_api_set": bool(user.usps_client_id and user.usps_client_secret),
+        "lob_set": bool(user.lob_api_key),
         "bcg_set": bool(user.bcg_username and user.bcg_password),
         "timezone_options": _TIMEZONE_OPTIONS,
     }
@@ -134,6 +136,8 @@ async def account_save(
     usps_client_id: Annotated[str, Form()] = "",
     usps_client_secret: Annotated[str, Form()] = "",
     leave_usps_secret_unchanged: Annotated[bool, Form()] = False,
+    lob_api_key: Annotated[str, Form()] = "",
+    leave_lob_key_unchanged: Annotated[bool, Form()] = False,
     bcg_username: Annotated[str, Form()] = "",
     bcg_password: Annotated[str, Form()] = "",
     leave_bcg_password_unchanged: Annotated[bool, Form()] = False,
@@ -182,6 +186,10 @@ async def account_save(
         user_in_db.usps_client_secret = usps_client_secret
         # Saving a new secret invalidates the cached probe result.
         user_in_db.usps_api_last_check = ""
+    if not leave_lob_key_unchanged:
+        user_in_db.lob_api_key = lob_api_key.strip()
+        # A new key invalidates the cached probe result.
+        user_in_db.lob_last_check = ""
     user_in_db.bcg_username = bcg_username.strip()
     if not leave_bcg_password_unchanged:
         user_in_db.bcg_password = bcg_password
@@ -256,6 +264,25 @@ async def test_usps_api(request: Request, db: SessionDep) -> Response:
     except USPSError as err:
         user_in_db.usps_api_last_check = f"fail: {_summary_for(err)}"
         request.session["account_flash"] = f"USPS API failed: {err}"
+    await db.commit()
+    return RedirectResponse("/auth/account", status_code=303)
+
+
+@router.post("/account/test-lob")
+async def test_lob(request: Request, db: SessionDep) -> Response:
+    user: User | None = getattr(request.state, "user", None)
+    if user is None:
+        return RedirectResponse("/auth/login", status_code=303)
+    user_in_db = await db.get(User, user.id)
+    assert user_in_db is not None
+    lob: LobClient = request.app.state.lob
+    try:
+        await lob.probe(user_in_db)
+        user_in_db.lob_last_check = "ok"
+        request.session["account_flash"] = "Lob: address verification succeeded ✓"
+    except LobError as err:
+        user_in_db.lob_last_check = f"fail: {_summary_for(err)}"
+        request.session["account_flash"] = f"Lob failed: {err}"
     await db.commit()
     return RedirectResponse("/auth/account", status_code=303)
 

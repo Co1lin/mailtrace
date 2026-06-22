@@ -35,7 +35,7 @@
     </div>
 
     <p>
-        <button type="button" class="secondary" onclick="validateAddress(this)">Validate against USPS</button>
+        <button type="button" class="secondary" onclick="validateAddress(this)">Validate</button>
         <span id="validate-status" style="margin-left:0.5rem"></span>
     </p>
 
@@ -69,7 +69,11 @@ async function validateAddress(btn) {
         form.city.value = a.city || form.city.value;
         form.state.value = a.state || form.state.value;
         form.zip.value = (a.zip5 || '') + (a.zip4 || '') + (a.dp || '');
-        status.textContent = 'standardized.'; status.className = 'ok';
+        if (data.warning) {
+            status.textContent = '⚠ ' + data.warning; status.className = 'err';
+        } else {
+            status.textContent = 'standardized.'; status.className = 'ok';
+        }
     } catch (e) {
         status.textContent = 'network error'; status.className = 'err';
     } finally {

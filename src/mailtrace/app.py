@@ -27,6 +27,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import mail, services
 from .config import Settings, get_settings
 from .db import make_engine, make_sessionmaker
+from .lob import LobClient
 from .middleware import AuthMiddleware
 from .models import AppConfig, Base
 from .store import Store
@@ -85,6 +86,11 @@ _ADDITIVE_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("mailpieces", "shipped_from_lng", "FLOAT"),
     # USPS predicted delivery date — drives the inferred "expected" status.
     ("mailpieces", "expected_delivery_date", "DATE"),
+    # Lob API key + probe result for address validation (replaces USPS
+    # Addresses API). NOT NULL needs a DEFAULT so SQLite can backfill
+    # existing rows on ALTER.
+    ("users", "lob_api_key", "VARCHAR(256) NOT NULL DEFAULT ''"),
+    ("users", "lob_last_check", "VARCHAR(512) NOT NULL DEFAULT ''"),
 )
 
 
@@ -296,12 +302,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             rolling_window_days=settings.serial_rolling_window,
             event_ttl_seconds=settings.feed_event_ttl_seconds,
         )
-        # USPSClient is per-process; methods take the calling user so
-        # credentials and token caches are scoped per-tenant.
+        # USPSClient / LobClient are per-process; methods take the calling
+        # user so credentials are scoped per-tenant.
         usps = USPSClient(store=store)
+        lob = LobClient()
         app.state.settings = settings
         app.state.store = store
         app.state.usps = usps
+        app.state.lob = lob
         app.state.db_engine = engine
         app.state.db_sessionmaker = sm
 
@@ -329,6 +337,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await poll_task
             await usps.aclose()
+            await lob.aclose()
             await store.close()
             await engine.dispose()
 

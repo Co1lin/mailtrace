@@ -64,10 +64,18 @@ class User(Base):
     bcg_username: Mapped[str] = mapped_column(String(120), default="", nullable=False)
     bcg_password: Mapped[str] = mapped_column(String(256), default="", nullable=False)
 
+    # Per-user Lob (lob.com) API key for address validation/standardization.
+    # Backs the in-page "Validate" button; replaces the USPS Addresses API
+    # (USPS discontinues it 2026-07-12). CASS-certified — returns ZIP+4 + the
+    # delivery point that feed the IMb routing code. Stored plaintext (same
+    # threat model as the BCG password row).
+    lob_api_key: Mapped[str] = mapped_column(String(256), default="", nullable=False)
+
     # Cached probe results from the per-user setup-page Test buttons.
     # Empty string = never tested. "ok" or "fail: <message>".
     usps_api_last_check: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     bcg_last_check: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    lob_last_check: Mapped[str] = mapped_column(String(512), default="", nullable=False)
 
     # Email notifications. notify_on_scans is the user's opt-in; notify_email
     # overrides the address we send to (defaults to User.email when null).

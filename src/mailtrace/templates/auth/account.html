@@ -18,13 +18,18 @@
             {% else %}<span class="pill inactive">required — needed to create pieces</span>
             {% endif %}
         </li>
-        <li>USPS API credentials (address validation):
-            {% if usps_api_set %}
+        <li>Lob API key (address validation):
+            {% if lob_set %}
               <span class="pill">configured</span>
-              {% if user.usps_api_last_check == 'ok' %} <span class="pill">last test ✓</span>
-              {% elif user.usps_api_last_check.startswith('fail') %} <span class="pill inactive">last test ✗</span>
+              {% if user.lob_last_check == 'ok' %} <span class="pill">last test ✓</span>
+              {% elif user.lob_last_check.startswith('fail') %} <span class="pill inactive">last test ✗</span>
               {% endif %}
             {% else %}<span class="pill inactive">optional — validate button is off without it</span>
+            {% endif %}
+        </li>
+        <li>USPS API credentials:
+            {% if usps_api_set %}<span class="pill">configured</span>
+            {% else %}<span class="pill inactive">legacy — no longer used (USPS retires it 2026-07-12)</span>
             {% endif %}
         </li>
         <li>BCG credentials (legacy pull-tracking):
@@ -93,10 +98,43 @@
 </div>
 
 <div class="card">
-    <h2>2 · USPS API credentials <small>(optional, recommended)</small></h2>
-    <p class="lede">For the in-page <em>Validate against USPS</em> button on
-       piece / address forms. Without these, the button returns an error
-       but you can still type addresses by hand.</p>
+    <h2>2 · Address validation <small>(Lob API key — optional, recommended)</small></h2>
+    <p class="lede">Powers the in-page <em>Validate</em> button on piece /
+       address forms. Lob is CASS-certified and returns the corrected
+       address with ZIP+4 and delivery point (which feed the IMb). Without a
+       key the button returns an error, but you can still type addresses by
+       hand.</p>
+    <details>
+        <summary>How to get a key</summary>
+        <ol>
+            <li>Sign up at <a href="https://dashboard.lob.com/" target="_blank" rel="noopener">dashboard.lob.com</a> (no credit card needed).</li>
+            <li>Add a <strong>billing address</strong> under <em>Settings → Billing</em> — Lob gates live API calls behind this even on the free tier.</li>
+            <li>Copy your <strong>Live</strong> Secret API key (<code>live_…</code>) from <em>Settings → API Keys</em>. The Publishable key won't work; the Test key returns dummy data.</li>
+            <li>Paste it below and <strong>Save all sections</strong>, then click <strong>Test Lob</strong> to verify.</li>
+        </ol>
+        <p class="lede"><small>Free tier: 300 verifications/month, far more than
+           typical use. Rotate or revoke the key anytime in the Lob dashboard.</small></p>
+    </details>
+
+    <label>Lob Secret API key
+        {% if user.lob_api_key %}<small>(stored)</small>{% endif %}
+    </label>
+    <input type="password" name="lob_api_key" autocomplete="new-password"
+           placeholder="{{ '•••••• (already saved; leave-unchanged checked below to keep)' if user.lob_api_key else 'live_…' }}">
+    {% if user.lob_api_key %}
+    <label><input type="checkbox" name="leave_lob_key_unchanged" value="true" checked> Keep existing key</label>
+    {% endif %}
+    {% if user.lob_last_check.startswith('fail') %}
+    <p class="err"><small>Last test failed: {{ user.lob_last_check[6:] }}</small></p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>USPS API credentials <small>(legacy — no longer used for validation)</small></h2>
+    <p class="lede"><strong>Superseded by the Lob key above.</strong> These
+       were for the old USPS Addresses API, which USPS is discontinuing on
+       2026-07-12. Kept here only so existing setups aren't disturbed; you
+       can leave them blank.</p>
     <details>
         <summary>How to get them</summary>
         <ol>
@@ -222,8 +260,8 @@
        verify the config end-to-end before creating real pieces.</p>
     <div class="row">
         <div>
-            <form method="POST" action="/auth/account/test-usps-api" style="display:inline">
-                <button class="secondary" type="submit" {% if not usps_api_set %}disabled title="Set USPS API credentials first"{% endif %}>Test USPS API</button>
+            <form method="POST" action="/auth/account/test-lob" style="display:inline">
+                <button class="secondary" type="submit" {% if not lob_set %}disabled title="Set a Lob API key first"{% endif %}>Test Lob</button>
             </form>
         </div>
         <div>

@@ -11,13 +11,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth import CurrentUserDep
 from ..db import SessionDep
+from ..lob import LobClient, LobError
 from ..models import Address
-from ..usps import USPSClient, USPSError
 
 router = APIRouter()
 
 
 _VALID_ROLES = {"sender", "recipient", "both"}
+
+# Human-readable hint for Lob's non-"deliverable" verdicts, shown next to the
+# Validate button. "deliverable" (and anything we don't have a message for)
+# yields no warning.
+_DELIVERABILITY_WARNINGS = {
+    "deliverable_incorrect_unit": (
+        "Building is valid but the apartment/unit looks wrong — double-check it."
+    ),
+    "deliverable_missing_unit": "Needs an apartment/unit number.",
+    "deliverable_unnecessary_unit": "The apartment/unit isn't needed here.",
+    "undeliverable": "USPS could not confirm this address is deliverable.",
+}
+
+
+def _deliverability_warning(deliverability: str) -> str | None:
+    return _DELIVERABILITY_WARNINGS.get(deliverability)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -59,14 +75,15 @@ async def validate(
     state: Annotated[str, Form()] = "",
     zip: Annotated[str, Form()] = "",
 ) -> JSONResponse:
-    """Standardize an address against USPS. Returns either
-    {"address": {...}} on success or {"error": "..."} on failure.
-    Used by the in-page Validate buttons on /pieces/new and /addresses/edit.
+    """Standardize an address against Lob (CASS-certified). Returns either
+    {"address": {...}, "warning": "..."|null} on success or {"error": "..."}
+    on failure. Used by the in-page Validate buttons on /pieces/new and
+    /addresses/edit.
 
     Declared before the /{address_id} routes so the path matches before
     FastAPI tries to coerce "validate" into an int and 422s.
     """
-    usps: USPSClient = request.app.state.usps
+    lob: LobClient = request.app.state.lob
     zip_digits = "".join(ch for ch in zip if ch.isdigit())
     payload: dict[str, str] = {
         "firmname": firmname,
@@ -79,10 +96,12 @@ async def validate(
     if len(zip_digits) >= 9:
         payload["zip4"] = zip_digits[5:9]
     try:
-        std = await usps.standardize_address(user, payload)
-    except USPSError as err:
+        std = await lob.verify(user, payload)
+    except LobError as err:
         return JSONResponse({"error": str(err)}, status_code=502)
-    return JSONResponse({"address": std.to_dict()})
+    return JSONResponse(
+        {"address": std.to_dict(), "warning": _deliverability_warning(std.deliverability)}
+    )
 
 
 @router.get("/{address_id}", response_class=HTMLResponse)

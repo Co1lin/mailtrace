@@ -61,6 +61,10 @@ class StandardizedAddress:
     zip5: str
     zip4: str
     dp: str
+    # Deliverability verdict from the verification provider, when available
+    # (Lob: "deliverable", "deliverable_incorrect_unit", "undeliverable", …).
+    # Empty when the provider doesn't report one. Drives the in-page warning.
+    deliverability: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return self.__dict__.copy()

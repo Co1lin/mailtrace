@@ -44,7 +44,7 @@
         <div><label>ZIP (5/9/11 digits)</label><input type="text" name="recipient_zip"></div>
     </div>
     <p>
-        <button type="button" class="secondary" onclick="validateRecipient(this)">Validate against USPS</button>
+        <button type="button" class="secondary" onclick="validateRecipient(this)">Validate</button>
         <span id="validate-status" style="margin-left:0.5rem"></span>
     </p>
 
@@ -96,7 +96,11 @@ async function validateRecipient(btn) {
         form.recipient_city.value = a.city || form.recipient_city.value;
         form.recipient_state.value = a.state || form.recipient_state.value;
         form.recipient_zip.value = (a.zip5 || '') + (a.zip4 || '') + (a.dp || '');
-        status.textContent = 'standardized.'; status.className = 'ok';
+        if (data.warning) {
+            status.textContent = '⚠ ' + data.warning; status.className = 'err';
+        } else {
+            status.textContent = 'standardized.'; status.className = 'ok';
+        }
     } catch (e) {
         status.textContent = 'network error'; status.className = 'err';
     } finally {

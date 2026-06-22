@@ -43,6 +43,7 @@ def _build_app(
     app.state.settings = settings
     app.state.store = store
     app.state.usps = usps
+    app.state.lob = usps  # FakeUSPS doubles as the Lob client in tests
     app.state.templates = templates
     app.state.db_sessionmaker = sm
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -1274,6 +1275,7 @@ async def test_admin_settings_only_admin(client: AsyncClient) -> None:
 async def test_account_form_renders_setup_sections(client: AsyncClient) -> None:
     page = await client.get("/auth/account")
     assert page.status_code == 200
+    assert "Lob API key" in page.text
     assert "USPS API credentials" in page.text
     assert "BCG credentials" in page.text
     assert "Mailer ID" in page.text
@@ -1649,17 +1651,17 @@ async def test_validate_address_uses_current_user_creds(
     regular_user: User,
     fake_usps: Any,
 ) -> None:
-    """The validate endpoint passes the logged-in user to the USPS client.
-    With our FakeUSPS that just echoes back, no creds are required for
-    the stub to succeed — but the User object is what gets passed in."""
+    """The validate endpoint passes the logged-in user to the Lob client.
+    With our fake that just echoes back, no creds are required for the stub
+    to succeed — but the User object is what gets passed in."""
     captured: dict[str, Any] = {}
-    real_standardize = fake_usps.standardize_address
+    real_verify = fake_usps.verify
 
     async def capturing(user: Any, address: dict[str, Any]) -> Any:
         captured["user_id"] = user.id
-        return await real_standardize(user, address)
+        return await real_verify(user, address)
 
-    fake_usps.standardize_address = capturing  # type: ignore[method-assign]
+    fake_usps.verify = capturing  # type: ignore[method-assign]
     resp = await client.post(
         "/addresses/validate",
         data={"street_address": "1 Main", "city": "X", "state": "CA", "zip": "94105"},
@@ -2582,8 +2584,8 @@ async def test_healthz_passes_when_redis_and_db_ok(anon_client: AsyncClient) -> 
 async def test_validate_address_endpoint_returns_standardized(
     client: AsyncClient, fake_usps: Any
 ) -> None:
-    """The /addresses/validate endpoint defers to the USPS client. The
-    fake_usps fixture echoes the input back with zip4=0001, dp=00."""
+    """The /addresses/validate endpoint defers to the Lob client. The
+    fake fixture echoes the input back with zip4=0001, dp=00."""
     resp = await client.post(
         "/addresses/validate",
         data={

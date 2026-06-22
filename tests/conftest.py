@@ -130,6 +130,16 @@ class FakeUSPS:
             )
         return StandardizedAddress(**self.standardize_response)
 
+    # --- Lob interface (the same fake doubles as app.state.lob) ------------
+    async def verify(self, user: Any, address: dict[str, str]) -> Any:
+        """Mirrors LobClient.verify; reuses standardize_response so existing
+        route tests keep working unchanged."""
+        return await self.standardize_address(user, address)
+
+    async def probe(self, user: Any) -> None:
+        if self.tracking_error is not None:
+            raise self.tracking_error
+
     async def probe_modern_creds(self, user: Any) -> None:
         if self.tracking_error is not None:
             raise self.tracking_error
